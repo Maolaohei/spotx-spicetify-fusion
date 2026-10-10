@@ -97,6 +97,15 @@ foreach ($path in $Target) {
     if (-not (Test-Path $path)) { Write-Host "  missing - skipped" -ForegroundColor DarkGray; continue }
 
     $text = [System.IO.File]::ReadAllText($path, $enc)
+
+    # Spotify 1.3.x switched to the Rspack runtime. Spicetify registers custom
+    # apps natively there; the 1.2.x anchors below do not exist. Use fix.ps1.
+    if ($text.Contains('rspackChunk') -or $text.Contains('.u=e=>""+(({')) {
+        Write-Host "  Rspack (Spotify 1.3.x) bundle detected - this script only handles 1.2.x Webpack." -ForegroundColor Yellow
+        Write-Host "  Run fix.ps1 instead; it verifies the Rspack chunk maps." -ForegroundColor Yellow
+        continue
+    }
+
     $todo = @()
 
     foreach ($e in $edits) {
