@@ -146,6 +146,47 @@ function Get-InstallFingerprint {
     return ($items -join ';')
 }
 
+# Reusable: PowerShell variables that are used but never assigned in the script.
+# This is the bug class that broke install.ps1 ($SpotifyDir) and fix.ps1
+# ($FusionRepoRaw): the parameter-binding error killed the run right after the
+# hotfix, and the dictionary fetch silently used a relative URI.
+function Get-UsedButUndefinedVariables {
+    param([string]$Path)
+    $tokens = $null
+    $parseErrors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseInput([System.IO.File]::ReadAllText($Path), [ref]$tokens, [ref]$parseErrors)
+    $assigned = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    # Script, function and scriptblock parameters all live in ParamBlockAst nodes.
+    foreach ($block in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.ParamBlockAst] }, $true)) {
+        foreach ($p in $block.Parameters) { [void]$assigned.Add($p.Name.VariablePath.UserPath) }
+    }
+    foreach ($node in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] }, $true)) {
+        if ($node.Left -is [System.Management.Automation.Language.VariableExpressionAst]) { [void]$assigned.Add($node.Left.VariablePath.UserPath) }
+    }
+    foreach ($node in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.ForEachStatementAst] }, $true)) {
+        [void]$assigned.Add($node.Variable.VariablePath.UserPath)
+    }
+    foreach ($node in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
+        foreach ($p in $node.Parameters) { [void]$assigned.Add($p.Name.VariablePath.UserPath) }
+    }
+    $automatic = @('_', 'PSItem', 'this', 'args', 'null', 'true', 'false', 'error', 'PSScriptRoot', 'PSCommandPath',
+        'MyInvocation', 'LASTEXITCODE', '?', '^', '$', 'Host', 'HOME', 'PWD', 'PID', 'OFS', 'Matches', 'input',
+        'foreach', 'switch', 'StackTrace', 'PSVersionTable', 'IsWindows', 'IsLinux', 'IsMacOS', 'IsCoreCLR', 'PSHOME',
+        'Profile', 'PSCulture', 'PSUICulture', 'PSEdition', 'PSBoundParameters', 'PSStyle', 'Console', 'ExecutionContext',
+        'NestedPromptLevel', 'ShellId', 'ConfirmPreference', 'DebugPreference', 'ErrorActionPreference', 'ErrorView',
+        'FormatEnumerationLimit', 'InformationPreference', 'MaximumHistoryCount', 'OutputEncoding', 'ProgressPreference',
+        'PSDefaultParameterValues', 'PSModuleAutoLoadingPreference', 'VerbosePreference', 'WarningPreference',
+        'WhatIfPreference', 'PSDebugPreference', 'PSDebugContext')
+    $uses = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.VariableExpressionAst] }, $true) |
+        ForEach-Object { $_.VariablePath.UserPath } | Sort-Object -Unique
+    return @($uses | Where-Object {
+            $automatic -notcontains $_ -and
+            -not $_.StartsWith('script:') -and -not $_.StartsWith('global:') -and
+            -not $_.StartsWith('env:') -and -not $_.StartsWith('local:') -and -not $_.StartsWith('using:') -and
+            -not $assigned.Contains($_)
+        })
+}
+
 function Get-SnapshotState {
     # Windows paths are case-insensitive; compare exact names to know the casing.
     param([string]$Dir)
@@ -310,13 +351,39 @@ Assert-That "wrapper ships native rspack support" ($beforeXpui.Contains('rspackC
 # ---------------------------------------------------------------------------
 Write-Step "Running fix.ps1 -SpotifyDir <sandbox>"
 $fixReport = Join-Path $OutDir "fix-report.json"
+# Custom-app compatibility fixtures (D2): the real apps live in the user's
+# Spicetify folders, so the E2E points fix.ps1 at fixtures that carry the exact
+# anchor strings instead of touching the machine's installed apps.
+$d2Root = Join-Path $work "d2-apps"
+$d2User = Join-Path $d2Root "user"
+$d2Cli = Join-Path $d2Root "cli"
+New-Item -ItemType Directory -Force -Path (Join-Path $d2User "stats"), (Join-Path $d2User "marketplace"), (Join-Path $d2Cli "lyrics-plus"), (Join-Path $d2Cli "reddit") | Out-Null
+$d2Topbar = 'const nav = document.querySelector(".main-topBar-topbarContentWrapper");'
+Set-Content -Path (Join-Path $d2User "stats\index.js") -Value $d2Topbar -Encoding ascii
+Set-Content -Path (Join-Path $d2User "marketplace\index.js") -Value $d2Topbar -Encoding ascii
+$d2Lyrics = @'
+const vpChain = document.querySelector(".Root__main-view .os-viewport") ?? document.querySelector(".Root__main-view .main-view-container__scroll-node");
+this.viewPort = document.querySelector(".main-view-container .os-viewport");
+this.mainViewOffsetTop = document.querySelector(".Root__main-view").offsetTop;
+const topBar = document.querySelector(".main-topBar-topbarContentWrapper");
+'@
+Set-Content -Path (Join-Path $d2Cli "lyrics-plus\index.js") -Value $d2Lyrics -Encoding ascii
+$d2TabBar = @'
+const resizeHost = document.querySelector(".Root__main-view .os-resize-observer-host, .Root__main-view .os-size-observer, .Root__main-view .main-view-container__scroll-node");
+const [windowSize, setWindowSize] = useState(resizeHost.clientWidth);
+const resizeHandler = () => setWindowSize(resizeHost.clientWidth);
+observer.observe(resizeHost);
+'@
+Set-Content -Path (Join-Path $d2Cli "lyrics-plus\TabBar.js") -Value $d2TabBar -Encoding ascii
+Set-Content -Path (Join-Path $d2Cli "reddit\TabBar.js") -Value $d2TabBar -Encoding ascii
+
 $fixPs1 = Join-Path $RepoRoot "fix.ps1"
 $previousEap = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
 try {
     # -JsHelperDir points at the sandbox copy of the CLI so the template
     # translation is verified without touching the machine's real Spicetify.
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $fixPs1 -Quiet -NoStop -JsHelperDir (Join-Path $spicetifyDir "jsHelper") -I18nDir (Join-Path $RepoRoot "i18n") -SpotifyDir $extracted -ReportPath $fixReport
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $fixPs1 -Quiet -NoStop -JsHelperDir (Join-Path $spicetifyDir "jsHelper") -I18nDir (Join-Path $RepoRoot "i18n") -SpotifyDir $extracted -SpicetifyUserAppsDir $d2User -SpicetifyCliAppsDir $d2Cli -ReportPath $fixReport
     $fixExit = $LASTEXITCODE
 }
 finally {
@@ -330,14 +397,73 @@ $afterRouteHash = Get-FileHash256 $routeJs
 $afterXpuiHash = Get-FileHash256 $xpuiJs
 
 $afterSnapshot = Get-SnapshotState -Dir $extracted
-Assert-That "fix.ps1 does not rewrite the Spicetify-built xpui.js" ($beforeXpuiHash -eq $afterXpuiHash) -Detail "B1/B2/B3/B4 were not needed"
-Assert-That "fix.ps1 does not inject the legacy URI hack" ($beforeWrapperHash -eq $afterWrapperHash) -Detail "C1/C2 skipped (native wrapper)"
-Assert-That "fix.ps1 does not rewrite the working route header" ($beforeRouteHash -eq $afterRouteHash) -Detail "D skipped (bundle negotiates rspackChunk)"
+# The provider fallbacks must land in the client bundle (they are the reason
+# switching between the extra apps in the left sidebar used to crash).
+Assert-That "xpui.js got the useNavigateStable fallback" ($afterXpui.Contains('/*fusion:nav*/')) -Detail "hook no longer throws without the provider"
+Assert-That "xpui.js got the RemoteConfig fallback" ($afterXpui.Contains('/*fusion:remoteconfig*/')) -Detail "context default returns definition defaults"
+Assert-That "xpui.js got the Registry fallback" ($afterXpui.Contains('/*fusion:registry*/')) -Detail "registry resolves to a no-op store"
+# The wrapper must be self-starting but must NOT carry the obsolete name-based
+# URI injection (that one would skip Spicetify's isXxx helpers).
+$afterWrapper = [System.IO.File]::ReadAllText($wrapperJs, [System.Text.Encoding]::UTF8)
+Assert-That "wrapper URI resolver self-starting" ($afterWrapper.Contains('if(!Spicetify.URI)Spicetify.URI={};')) -Detail "placeholder created instead of waiting forever"
+Assert-That "no legacy name-based URI injection" (-not $afterWrapper.Contains('Spicetify.URI=s')) -Detail "Spicetify's own finders stay in charge"
+# The route bundle may legitimately change (D2 custom-app patches), but its
+# Rspack push header must stay intact.
+$beforeRouteText = [System.IO.File]::ReadAllText($routeJs, [System.Text.Encoding]::UTF8)
+Assert-That "route bundle push header intact" ($beforeRouteText.Substring(0, [Math]::Min(200, $beforeRouteText.Length)).Contains('rspackChunk')) -Detail "header still negotiates rspackChunk"
 Assert-That "snapshot casing normalized back to lowercase" ($afterSnapshot.Lower -and -not $afterSnapshot.Cased) -Detail "v8_context_snapshot.bin"
 
 $report = Get-Content -Path $fixReport -Raw | ConvertFrom-Json
 $failedPatches = @($report.results | Where-Object { $_.status -eq 'failed' })
 Assert-That "fix report has no failed patches" ($failedPatches.Count -eq 0) -Detail "$($report.results.Count) patch entries"
+# C: the wrapper's URI resolver must be made self-starting, otherwise
+# Spicetify.URI stays undefined and every extension using it throws at load.
+$deployedWrapper = [System.IO.File]::ReadAllText((Join-Path $appsDir "helper\spicetifyWrapper.js"), [System.Text.Encoding]::UTF8)
+$templateWrapper = [System.IO.File]::ReadAllText((Join-Path $spicetifyDir "jsHelper\spicetifyWrapper.js"), [System.Text.Encoding]::UTF8)
+Assert-That "wrapper URI resolver made self-starting (deployed)" ($deployedWrapper.Contains('if(!Spicetify.URI)Spicetify.URI={};')) -Detail "placeholder created instead of waiting forever"
+Assert-That "wrapper URI resolver made self-starting (template)" ($templateWrapper.Contains('if(!Spicetify.URI)Spicetify.URI={};')) -Detail "survives spicetify apply"
+$uriPatch = $report.results | Where-Object { $_.Patch -like 'C2: URI self-start*' } | Select-Object -First 1
+Assert-That "C2 reported as applied" ($uriPatch -and $uriPatch.status -eq 'applied') -Detail $(if ($uriPatch) { $uriPatch.detail } else { 'missing entry' })
+
+# D2: the custom-app patches must land in the fixtures (all three apps) and the
+# result must still be valid JavaScript.
+$d2Expected = @(
+    'D2: app top-bar container',
+    'D2: lyrics-plus main-view selectors',
+    'D2: lyrics-plus viewport field',
+    'D2: lyrics-plus main-view offset',
+    'D2: app resize-host selector',
+    'D2: app resize-host null guard',
+    'D2: app resize-handler null guard',
+    'D2: app ResizeObserver guard'
+)
+foreach ($name in $d2Expected) {
+    $entry = $report.results | Where-Object { $_.Patch -eq $name } | Select-Object -First 1
+    Assert-That "$name applied to fixtures" ($entry -and $entry.status -eq 'applied') -Detail $(if ($entry) { "$($entry.status): $($entry.detail)" } else { 'missing entry' })
+}
+$d2Files = @(
+    (Join-Path $d2User "stats\index.js"),
+    (Join-Path $d2Cli "lyrics-plus\index.js"),
+    (Join-Path $d2Cli "lyrics-plus\TabBar.js"),
+    (Join-Path $d2Cli "reddit\TabBar.js")
+)
+foreach ($file in $d2Files) {
+    $text = [System.IO.File]::ReadAllText($file, [System.Text.Encoding]::UTF8)
+    Assert-That "fixture patched: $(Split-Path $file -Leaf) in $(Split-Path (Split-Path $file -Parent) -Leaf)" ($text.Contains('.main-view-container') -or $text.Contains('global-nav-bar')) -Detail "1.3.x fallback present"
+}
+$nodeCmd = Get-Command node -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($nodeCmd) {
+    foreach ($file in $d2Files) {
+        $tmpJs = Join-Path $work ("d2check-" + (Split-Path $file -Leaf) + ".mjs")
+        Copy-Item $file $tmpJs -Force
+        & $nodeCmd.Source --check $tmpJs 2>$null
+        Assert-That "fixture parses: $(Split-Path $file -Leaf)" ($LASTEXITCODE -eq 0) -Detail "node --check"
+    }
+}
+else {
+    Assert-That "fixture parse check" $true -Detail "skipped (node not installed)"
+}
+
 $b4 = $report.results | Where-Object { $_.Patch -like 'B4*' } | Select-Object -First 1
 Assert-That "B4 reports Spicetify-managed chunk map" ($b4 -and $b4.status -eq 'not-needed') -Detail $(if ($b4) { "$($b4.status): $($b4.detail)" } else { "missing entry" })
 
@@ -376,7 +502,7 @@ $deployedHomeHash = Get-FileHash256 (Join-Path $appsDir "helper\homeConfig.js")
 $secondReport = Join-Path $OutDir "fix-report-second.json"
 $ErrorActionPreference = 'Continue'
 try {
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $fixPs1 -Quiet -NoStop -JsHelperDir (Join-Path $spicetifyDir "jsHelper") -I18nDir (Join-Path $RepoRoot "i18n") -SpotifyDir $extracted -ReportPath $secondReport
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $fixPs1 -Quiet -NoStop -JsHelperDir (Join-Path $spicetifyDir "jsHelper") -I18nDir (Join-Path $RepoRoot "i18n") -SpotifyDir $extracted -SpicetifyUserAppsDir $d2User -SpicetifyCliAppsDir $d2Cli -ReportPath $secondReport
 }
 finally {
     $ErrorActionPreference = $previousEap
@@ -417,6 +543,7 @@ $linkChecks = @(
     @{ File = 'install.sh'; Name = 'FUSION_REPO_URL'; Pattern = 'FUSION_REPO_URL="([^"]+)"'; Expect = $expectedRepo },
     @{ File = 'install.sh'; Name = 'FUSION_REPO_RAW'; Pattern = 'FUSION_REPO_RAW="([^"]+)"'; Expect = $expectedRaw },
     @{ File = 'fix.ps1'; Name = 'FusionRepoUrl'; Pattern = '\$FusionRepoUrl\s*=\s*''([^'']+)'''; Expect = $expectedRepo },
+    @{ File = 'fix.ps1'; Name = 'FusionRepoRaw'; Pattern = '\$FusionRepoRaw\s*=\s*''([^'']+)'''; Expect = $expectedRaw },
     @{ File = 'fix.sh'; Name = 'FUSION_REPO_URL'; Pattern = 'FUSION_REPO_URL="([^"]+)"'; Expect = $expectedRepo },
     @{ File = 'custom-apps.ps1'; Name = 'FusionRepoRaw'; Pattern = '\$FusionRepoRaw\s*=\s*''([^'']+)'''; Expect = $expectedRaw },
     @{ File = 'custom-apps.sh'; Name = 'FUSION_REPO_RAW'; Pattern = 'FUSION_REPO_RAW="([^"]+)"'; Expect = $expectedRaw }
@@ -583,6 +710,13 @@ foreach ($check in @(
     )) {
     $lines = Get-GitGrepLines -Pattern $check.Pattern -Paths @($check.File)
     Assert-That "$($check.File) handles $($check.Pattern)" ($lines.Count -ge 1) -Detail "$($lines.Count) reference(s)"
+}
+
+# No script may read a variable it never assigns: an undefined variable used to
+# abort install.ps1 right after the hotfix paragraph.
+foreach ($script in @('install.ps1', 'fix.ps1', 'custom-apps.ps1', 'fix-marketplace-nav.ps1', 'tools/verify-offline.ps1')) {
+    $undefined = Get-UsedButUndefinedVariables -Path (Join-Path $RepoRoot $script)
+    Assert-That "$script has no undefined variables" ($undefined.Count -eq 0) -Detail $(if ($undefined.Count) { $undefined -join ', ' } else { 'all reads assigned' })
 }
 
 # ---------------------------------------------------------------------------

@@ -109,7 +109,7 @@ bash install.sh --verify-only
 
 ### 离线端到端验证（Windows，不安装）
 
-`tools/verify-offline.ps1` 会用已发布的固定工件把整条流水线重跑一遍：下载固定版本的 Spotify 安装包，仅用 `/extract` 解包到临时沙箱（不写注册表、不产生 `%APPDATA%\Spotify`），用真实 SpotX 给它打补丁，再用 `spicetify -n`（**不会启动客户端**）应用 Spicetify 2.45.3 + Marketplace，最后用 `fix.ps1 -SpotifyDir <沙箱>` 处理，并断言“本来就正确”的 bundle 保持字节不变；同时校验所有脚本横幅、issue 链接与 README 一行命令都指向本仓库，并确认已发布的 raw URL 可访问（共 81 项断言）。结果写入 `verify-out/offline-e2e.json`。
+`tools/verify-offline.ps1` 会用已发布的固定工件把整条流水线重跑一遍：下载固定版本的 Spotify 安装包，仅用 `/extract` 解包到临时沙箱（不写注册表、不产生 `%APPDATA%\Spotify`），用真实 SpotX 给它打补丁，再用 `spicetify -n`（**不会启动客户端**）应用 Spicetify 2.45.3 + Marketplace，最后用 `fix.ps1 -SpotifyDir <沙箱>` 处理，并断言“本来就正确”的 bundle 保持字节不变；同时校验所有脚本横幅、issue 链接与 README 一行命令都指向本仓库，并确认已发布的 raw URL 可访问（共 109 项断言）。结果写入 `verify-out/offline-e2e.json`。
 
 ```powershell
 pwsh tools/verify-offline.ps1
@@ -229,13 +229,15 @@ graph TD
 ### 核心技术细节：
 
 1. **解决 1.3.0 启动致命黑屏**：清除 Spicetify 错判版本注入的非法语法块 `badSnackbar`，解除 V8 引擎解析死锁。
-2. **解决 Marketplace 白屏崩溃**：将裸调用的 `useNavigateStable` 包装进安全降级闭包，降级回退至 `Spicetify.Platform.History.push`。
-3. **解决 RegistryContext 弹窗报错**：为 Spotify 1.3.0 全新的注册表上下文注入 `{entries:new Map()}` 安全兜底，杜绝 `useReducer on undefined`。
+2. **Spicetify 自定义应用行的 provider 降级（1.3.x）**：Spicetify 把「额外功能」应用渲染在 Spotify 的 React provider 之外，于是三个 hook 抛异常——只要在左侧栏切换这些额外应用，Spotify 就会用致命弹窗 **「出错了 / 重新加载页面」** 覆盖整个界面：`useNavigateStable`（缺 `StableUseNavigateProvider`）、`RemoteConfig` 默认 delegate（“Please wrap your component in RemoteConfig Provider”）、`RegistryContext`（“Trying to use 'RegistryContext' without 'RegistryProvider'”）。现在三者都改为降级而不是抛错（导航回退到 `Spicetify.Platform.History`、远端配置返回定义默认值、Registry 返回空实现），并同步写入 Spicetify 暂存副本，`spicetify apply` 后依然生效；在 provider 之内的页面行为完全不变。
+3. **RegistryContext 旧版兜底**：为 1.2.x / 1.3.0 老 bundle 保留 `{entries:new Map()}` 安全兜底，杜绝 `useReducer on undefined`。
 4. **适配 Rspack 分包加载链**：自动扫描并为所有 `spicetify-routes-*.js` 生成分包表，分别注入到 Rspack 内部的 `.u` 定位器与 `MiniCss` 样式白名单。
 5. **挂载 Rspack 全局运行时**：修补 `spicetifyWrapper.js`，兼容 `window.rspackChunk`，确保 `Spicetify.React` 与 `Spicetify.ReactDOM` 正常绑定。
 6. **动态接入 Spicetify.URI**：通过解析内部符号表动态导出 URI 解析构造器。
 7. **平替与标准化快照命名**：将 SpotX 恶意修改的大写 `V8_context_snapshot.bin` 恢复标准小写，保障 1.2.x 存量逻辑不受干扰。
 8. **Spicetify 面板汉化**：Spicetify 自带的 **实验性功能**、**首页排序**、**侧边栏配置** 三个面板只有英文。脚本会把菜单入口、`Up`/`Down`/`Stick`/`Lower`/`Hide` 按钮、搜索框、重置行与提示语全部换成中文，并且**同时改写 CLI 模板**（这样每次 `spicetify apply` 出来的仍是中文）与已经部署到客户端的副本。**实验性功能面板内部的功能项也已汉化**：这些文案是 Spotify 自己的功能开关描述（写在客户端 bundle 里），所以仓库提供 [i18n/exp-features.zh.json](i18n/exp-features.zh.json) 映射表（按内部开关名索引），补丁向 `expFeatures.js` 注入查表逻辑——字典里没有的新开关自动回退英文，Spotify 升级不会把面板弄坏。替换文本以 JS 的 `\uXXXX` 转义写入，保证脚本本体仍为纯 ASCII。如需保留英文：`fix.ps1 -KeepEnglish` / `KEEP_ENGLISH=1 bash fix.sh`。
+
+9. **自定义应用与 Spotify 1.3.x 的 DOM 兼容**：精选应用与 Spicetify 自带的 `lyrics-plus`/`reddit` 都写的是 1.2.x 的 DOM 选择器（`main-topBar-topbarContentWrapper`、`.Root__main-view`、`.os-viewport`、`.os-resize-observer-host`）；在 1.3.x 上这些查询返回 `null`，应用渲染时直接抛错（`createPortal(children, null)` 触发 React error #200，或对 `clientWidth`/`offsetTop` 的 null 解引用），于是又出现致命弹窗。现在每个选择器都保留旧写法在前、追加 1.3.x 回退（`#global-nav-bar`、`.main-view-container__scroll-node`、`.main-view-container`）并加空值保护，且**同时改写应用源码与已部署的路由 bundle**。
 
 ## 📚 逆向工程系列文章与参考
 

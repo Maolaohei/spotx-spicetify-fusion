@@ -109,6 +109,7 @@ import sys
 import glob
 import json
 import datetime
+import io
 import re
 
 themed_dir = os.path.expanduser("~/.config/spicetify/Extracted/Themed/xpui")
@@ -285,18 +286,74 @@ for xpui_dir in target_dirs:
         else:
             add_result("B1: Snackbar SyntaxError", "not-needed", "not present (Spicetify >= 2.45 bundles are clean)")
 
-        # B2: legacy useNavigateStable safe fallback
-        import re
-        nav = re.search(r"return\(0,([A-Za-z_$][\w$]*)\.useNavigateStable\)\(\)", content)
-        if nav:
-            module = nav.group(1)
-            safe_nav = ("return(()=>{try{return(0," + module + ".useNavigateStable)()}catch(err){"
-                        "return Spicetify?.Platform?.History?.push||Spicetify?.Platform?.History?.navigate||(()=>({}))}})()")
-            content = content[:nav.start()] + safe_nav + content[nav.end():]
+        # B2: Spicetify renders its custom-app navigation rows outside Spotify's
+        # React providers; two hooks on those rows then throw and take the whole
+        # UI down with Spotify's fatal "Something went wrong / Reload page"
+        # dialog when switching between the extra apps in the left sidebar:
+        #   1. useNavigateStable() -> "must be used within a StableUseNavigateProvider"
+        #   2. the RemoteConfig context's default delegate -> "Please wrap your
+        #      component in RemoteConfig Provider"
+        # Both get provider-independent fallbacks; pages rendered inside the
+        # providers behave exactly as before. Replacement is done through
+        # functions so no backreference escaping is involved.
+        def _nav_fallback(match):
+            return ('if(!e)return(...p)=>{try{const h=globalThis.Spicetify?.Platform?.History;'
+                    'if(typeof p[0]==="number"){h?.go?.(p[0]);return}'
+                    'const f=h?.push??h?.replace;if(typeof f==="function")f(p[0])}catch(_){}};/*fusion:nav*/')
+
+        def _nav_legacy(match):
+            return ('return(()=>{try{return(0,' + match.group(1) + '.useNavigateStable)()}catch(err){'
+                    'return Spicetify?.Platform?.History?.push||Spicetify?.Platform?.History?.navigate||(()=>({}))}})()')
+
+        def _remote_config(match):
+            return ('(0,' + match.group(1) + '.createContext)(new ' + match.group(2) + '.Delegate(()=>({'
+                    'getValue:e=>e&&typeof e==="object"&&"default"in e?e.default:void 0,'
+                    'toJSON:()=>({}),toBuilder:()=>null})))/*fusion:remoteconfig*/')
+
+        nav_throw = 'if(!e)throw Error("useNavigateStable must be used within a StableUseNavigateProvider");'
+        nav_legacy_pattern = r'return\(0,([A-Za-z_$][\w$]*)\.useNavigateStable\)\(\)'
+        rc_throw = (r'\(0,(\w+)\.createContext\)\(new ([\w.]+)\.Delegate\('
+                    r'\(\)=>\{throw Error\("Please wrap your component in RemoteConfig Provider"\)\}\)\)')
+
+        if '/*fusion:nav*/' in content:
+            add_result("B2: useNavigateStable fallback", "not-needed", "fallback already installed")
+        elif nav_throw in content:
+            content = content.replace(nav_throw, _nav_fallback(None))
             patched = True
-            add_result("B2: useNavigateStable fallback", "applied", "wrapped (0,%s.useNavigateStable)()" % module)
+            add_result("B2: useNavigateStable fallback", "applied",
+                       "hook falls back to Platform.History instead of throwing")
+        elif re.search(nav_legacy_pattern, content):
+            content = re.sub(nav_legacy_pattern, _nav_legacy, content, count=1)
+            patched = True
+            add_result("B2: useNavigateStable fallback", "applied", "legacy call site wrapped")
         else:
-            add_result("B2: useNavigateStable fallback", "not-needed", "anchor absent (fixed on this build)")
+            add_result("B2: useNavigateStable fallback", "failed", "anchor not found on this build")
+
+        if '/*fusion:remoteconfig*/' in content:
+            add_result("B2: RemoteConfig fallback", "not-needed", "fallback already installed")
+        elif re.search(rc_throw, content):
+            content = re.sub(rc_throw, _remote_config, content, count=1)
+            patched = True
+            add_result("B2: RemoteConfig fallback", "applied",
+                       "missing RemoteConfig provider returns definition defaults instead of throwing")
+        else:
+            add_result("B2: RemoteConfig fallback", "failed", "anchor not found on this build")
+
+        # B3: the RegistryContext accessor throws when the provider is missing
+        # (same nav-row chain as above). Resolve to a no-op store instead.
+        reg_throw = ("if(null===e)throw Error(\"Trying to use 'RegistryContext' "
+                     "without 'RegistryProvider'!\");")
+        reg_replacement = ("if(null===e)e={resolve:()=>({getItem:()=>null,setItem:()=>{},"
+                           "getEvents:()=>({addListener(){},removeListener(){}})})};/*fusion:registry*/")
+        if '/*fusion:registry*/' in content:
+            add_result("B3: RegistryProvider fallback", "not-needed", "fallback already installed")
+        elif reg_throw in content:
+            content = content.replace(reg_throw, reg_replacement)
+            patched = True
+            add_result("B3: RegistryProvider fallback", "applied",
+                       "missing RegistryProvider resolves to a no-op store instead of throwing")
+        else:
+            add_result("B3: RegistryProvider fallback", "failed", "anchor not found on this build")
 
         # B3: legacy RegistryContext safe guard (Spotify 1.3.0 only)
         old_reg = "(0,i.useContext)(e.yv)"
@@ -386,30 +443,29 @@ for xpui_dir in target_dirs:
             else:
                 add_result("C1: rspackChunk hook", "failed", "wrapper shape unknown; neither native nor legacy anchor found")
 
+        # C2: make the wrapper's URI resolver self-starting (same as fix.ps1).
+        # waitForURI() only waits for Spicetify.URI and never creates it, so on
+        # builds where nothing else creates it (observed on Spotify 1.3.4) it
+        # stays undefined and every extension that touches it throws at load.
         legacy_pattern = r'\(\(\)=>\{let u=f\.find\(m=>m\?\.NQG\?\.PLAYLIST_V2\);.*?Spicetify\.URI=s\}\}\)\(\)\,?'
-        has_modern_uri = "URI.fromString" in wcontent or "waitForURI" in wcontent
-        if has_modern_uri:
-            if "Spicetify.URI=s" in wcontent:
-                cleaned = re.sub(legacy_pattern, "", wcontent)
-                if cleaned != wcontent:
-                    wcontent = cleaned
-                    wpatched = True
-                    add_result("C2: Spicetify.URI export", "applied",
-                               "removed obsolete legacy URI injection left by older fix.sh runs")
-                else:
-                    add_result("C2: Spicetify.URI export", "skipped", "legacy marker present but could not be removed cleanly")
-            else:
-                add_result("C2: Spicetify.URI export", "not-needed", "wrapper resolves URI natively")
-        else:
-            uri_target = "Spicetify.React=f.find(m=>m?.useMemo),"
-            uri_inject = ('(()=>{let u=f.find(m=>m?.NQG?.PLAYLIST_V2);if(u){let s=u.o_h("spotify:track:4uLU6hMCjMI75M1A2tKUQC")?.constructor;'
-                          'if(s){s.Type=u.NQG,s.from=u.o_h,s.fromString=u.Lce,s.idToHex=u.DY5,s.hexToId=u.dx2,Spicetify.URI=s}}})(),')
-            if uri_target in wcontent and "Spicetify.URI=s" not in wcontent:
-                wcontent = wcontent.replace(uri_target, uri_target + uri_inject)
+        if "Spicetify.URI=s" in wcontent:
+            cleaned = re.sub(legacy_pattern, "", wcontent)
+            if cleaned != wcontent:
+                wcontent = cleaned
                 wpatched = True
-                add_result("C2: Spicetify.URI export", "applied", "legacy wrapper patched")
-            else:
-                add_result("C2: Spicetify.URI export", "failed", "wrapper shape unknown; legacy anchor not found")
+                add_result("C2: legacy URI injection", "applied",
+                           "removed the old name-based injection (it skipped Spicetify's isXxx helpers)")
+        uri_wait = re.compile(r'if\(!Spicetify\.URI\)\{setTimeout\(\(\)=>[\w$]+\([\w$]+\+1\),Math\.min\(10\*2\*\*Math\.min\([\w$]+,6\),500\)\);return\}')
+        if uri_wait.search(wcontent):
+            wcontent = uri_wait.sub('if(!Spicetify.URI)Spicetify.URI={};', wcontent, count=1)
+            wpatched = True
+            add_result("C2: URI self-start", "applied",
+                       "resolver creates the placeholder instead of waiting forever")
+        elif 'if(!Spicetify.URI)Spicetify.URI={};' in wcontent:
+            add_result("C2: URI self-start", "not-needed", "already patched")
+        else:
+            add_result("C2: URI self-start", "failed",
+                       "wrapper anchor not found; URI may stay undefined for extensions")
 
         if wpatched:
             with open(wrapper_js, "w", encoding="utf-8") as f:
@@ -466,6 +522,124 @@ elif ui_state["files"] == 0:
     add_result("E: Chinese UI", "skipped", "Spicetify helper scripts not found (features disabled?)")
 else:
     add_result("E: Chinese UI", "failed", "helper shape changed: %s" % ", ".join(ui_state["drift"]))
+
+# D2: custom-app compatibility with Spotify 1.3.x. Spicetify's own apps and the
+# curated ones were written against 1.2.x DOM ids; on 1.3.x those selectors are
+# null, the app throws while rendering, and React replaces the whole UI with
+# Spotify's fatal "Something went wrong / Reload page" dialog - reproducible by
+# switching between the extra apps in the left sidebar. Legacy selector stays
+# first (1.2.x behaviour untouched), the 1.3.x fallback / null guard is appended.
+if os.environ.get("SKIP_APP_PATCHES"):
+    add_result("D2: custom-app patches", "skipped", "disabled with SKIP_APP_PATCHES=1")
+else:
+    d2_patches = {
+        "topbar": {
+            "name": "D2: app top-bar container",
+            "marker": "/*fusion:topbar*/",
+            "old": 'document.querySelector(".main-topBar-topbarContentWrapper")',
+            "new": ('(document.querySelector(".main-topBar-topbarContentWrapper")'
+                    ' || document.querySelector("#global-nav-bar .custom-navlinks-scrollable_container")'
+                    ' || document.querySelector("#global-nav-bar") || document.body)/*fusion:topbar*/'),
+        },
+        "viewportChain": {
+            "name": "D2: lyrics-plus main-view selectors",
+            "marker": "/*fusion:vp*/",
+            "old": ('document.querySelector(".Root__main-view .os-viewport") ?? '
+                    'document.querySelector(".Root__main-view .main-view-container__scroll-node")'),
+            "new": ('document.querySelector(".main-view-container__scroll-node") ?? '
+                    'document.querySelector(".main-view-container") ?? document.body/*fusion:vp*/'),
+        },
+        "viewportField": {
+            "name": "D2: lyrics-plus viewport field",
+            "marker": ('(document.querySelector(".main-view-container .os-viewport") ?? '
+                       'document.querySelector(".main-view-container__scroll-node") ?? document.body)'),
+            "old": 'document.querySelector(".main-view-container .os-viewport")',
+            "new": ('(document.querySelector(".main-view-container .os-viewport") ?? '
+                    'document.querySelector(".main-view-container__scroll-node") ?? document.body)'),
+        },
+        "offsetTop": {
+            "name": "D2: lyrics-plus main-view offset",
+            "marker": '?? document.querySelector(".main-view-container") ?? document.body).offsetTop',
+            "old": 'document.querySelector(".Root__main-view").offsetTop',
+            "new": ('((document.querySelector(".Root__main-view") ?? '
+                    'document.querySelector(".main-view-container") ?? document.body).offsetTop)'),
+        },
+        "resizeSel": {
+            "name": "D2: app resize-host selector",
+            "marker": '.main-view-container__scroll-node, .main-view-container"',
+            "old": ('".Root__main-view .os-resize-observer-host, .Root__main-view .os-size-observer, '
+                    '.Root__main-view .main-view-container__scroll-node"'),
+            "new": ('".Root__main-view .os-resize-observer-host, .Root__main-view .os-size-observer, '
+                    '.Root__main-view .main-view-container__scroll-node, .main-view-container__scroll-node, '
+                    '.main-view-container"'),
+        },
+        "resizeInit": {
+            "name": "D2: app resize-host null guard",
+            "marker": "useState(resizeHost?.clientWidth ?? 0)",
+            "old": "useState(resizeHost.clientWidth)",
+            "new": "useState(resizeHost?.clientWidth ?? 0)",
+        },
+        "resizeHandler": {
+            "name": "D2: app resize-handler null guard",
+            "marker": "setWindowSize(resizeHost?.clientWidth ?? 0)",
+            "old": "setWindowSize(resizeHost.clientWidth)",
+            "new": "setWindowSize(resizeHost?.clientWidth ?? 0)",
+        },
+        "observe": {
+            "name": "D2: app ResizeObserver guard",
+            "marker": "if (resizeHost) observer.observe(resizeHost);",
+            "old": "observer.observe(resizeHost);",
+            "new": "if (resizeHost) observer.observe(resizeHost);",
+        },
+    }
+    xdg = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    user_apps = os.environ.get("SPICETIFY_APPS_DIR") or os.path.join(xdg, "spicetify", "CustomApps")
+    cli_apps = os.environ.get("SPICETIFY_CLI_APPS_DIR") or os.path.expanduser("~/.spicetify/CustomApps")
+
+    d2_targets = [
+        (os.path.join(user_apps, "stats", "index.js"), ["topbar"]),
+        (os.path.join(user_apps, "marketplace", "index.js"), ["topbar"]),
+        (os.path.join(cli_apps, "lyrics-plus", "index.js"),
+         ["topbar", "viewportChain", "viewportField", "offsetTop"]),
+        (os.path.join(cli_apps, "lyrics-plus", "TabBar.js"),
+         ["resizeSel", "resizeInit", "resizeHandler", "observe"]),
+        (os.path.join(cli_apps, "reddit", "TabBar.js"),
+         ["resizeSel", "resizeInit", "resizeHandler", "observe"]),
+    ]
+    for xpui_dir in target_dirs:
+        d2_targets.append((os.path.join(xpui_dir, "spicetify-routes-stats.js"), ["topbar"]))
+        d2_targets.append((os.path.join(xpui_dir, "spicetify-routes-marketplace.js"), ["topbar"]))
+        d2_targets.append((os.path.join(xpui_dir, "spicetify-routes-lyrics-plus.js"),
+                           ["topbar", "viewportChain", "viewportField", "offsetTop",
+                            "resizeSel", "resizeInit", "resizeHandler", "observe"]))
+
+    d2_counts = {key: 0 for key in d2_patches}
+    d2_touched = 0
+    for d2_path, keys in d2_targets:
+        if not os.path.isfile(d2_path):
+            continue
+        with io.open(d2_path, encoding="utf-8") as f:
+            d2_text = f.read()
+        d2_changed = False
+        for key in keys:
+            patch = d2_patches[key]
+            if patch["marker"] in d2_text or patch["old"] not in d2_text:
+                continue
+            d2_text = d2_text.replace(patch["old"], patch["new"])
+            d2_counts[key] += 1
+            d2_changed = True
+        if d2_changed:
+            with io.open(d2_path, "w", encoding="utf-8", newline="") as f:
+                f.write(d2_text)
+            d2_touched += 1
+
+    for key, patch in d2_patches.items():
+        if d2_counts[key]:
+            add_result(patch["name"], "applied", "%d file(s) patched for Spotify 1.3.x" % d2_counts[key])
+        elif d2_touched or os.path.isdir(user_apps) or os.path.isdir(cli_apps):
+            add_result(patch["name"], "not-needed", "no unpatched occurrence found")
+        else:
+            add_result(patch["name"], "skipped", "no Spicetify CustomApps directory found")
 
 report_path = os.environ.get("REPORT_PATH", "")
 if report_path:

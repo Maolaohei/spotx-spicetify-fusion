@@ -127,7 +127,7 @@ SpotX against it, applies Spicetify 2.45.3 + Marketplace with `spicetify -n`
 (never launches the client), runs `fix.ps1 -SpotifyDir <sandbox>` and asserts
 that an already-correct bundle is left byte-identical. It also verifies that
 every script banner, issue link and README one-liner points at this fork and
-that the published raw URLs resolve (81 assertions). The result is written to
+that the published raw URLs resolve (109 assertions). The result is written to
 `verify-out/offline-e2e.json`.
 
 ```powershell
@@ -253,8 +253,8 @@ graph TD
 ### Key Technical Fixes:
 
 1. **SyntaxError Blackscreen Resolution**: Removes the corrupted `Spicetify.Snackbar.enqueueImageSnackbar=` statement erroneously injected by Spicetify's broken semver comparator.
-2. **`useNavigateStable` Safe Fallback**: Wraps router calls in a try-catch with fallback to `Spicetify.Platform.History.push` to eliminate Marketplace white screen.
-3. **`RegistryContext` Safe Guard**: Prevents Spotify 1.3.0 from crashing with `useReducer on undefined`.
+2. **Provider fallbacks for Spicetify's custom-app rows (1.3.x)**: Spicetify renders the extra apps' rows outside Spotify's React providers, so three hooks threw and Spotify replaced the whole UI with its fatal **"Something went wrong / Reload page"** dialog whenever the left-sidebar extra apps were switched: `useNavigateStable` (no `StableUseNavigateProvider`), the `RemoteConfig` context default delegate ("Please wrap your component in RemoteConfig Provider") and `RegistryContext` ("Trying to use 'RegistryContext' without 'RegistryProvider'"). Each one now falls back instead of throwing - `Spicetify.Platform.History` for navigation, definition defaults for remote config, a no-op store for the registry - and the same guard is written into Spicetify's staging copies so `spicetify apply` keeps it. Pages rendered *inside* the providers behave exactly as before.
+3. **`RegistryContext` legacy guard**: keeps the 1.2.x/1.3.0 `useReducer on undefined` crash guard for older bundles.
 4. **Rspack Chunk Registration**: Injects all `spicetify-routes-*.js` into Rspack's internal chunk map (`.u`) and MiniCss whitelist.
 5. **Rspack Global Hooking**: Updates `spicetifyWrapper.js` to hook `window.rspackChunk || window.rspackChunkclient_web`, ensuring `Spicetify.React` and `Spicetify.ReactDOM` are correctly bound.
 6. **Dynamic `Spicetify.URI`**: Reconnects the URI parser directly from Spotify's internal module table.
@@ -302,6 +302,8 @@ Properties:
 - **Backed up**: first write saves `<file>.prenav.bak`. Full undo: `spicetify restore backup apply`.
 - Verified on Spotify `1.2.99.317.g9bd8c54d` + Spicetify `2.44.0`, Windows 11 (2026-09-07). Re-run after a Spotify
   update, `spicetify apply` / `backup apply` / `restore`, or a Spicetify upgrade.
+
+9. **Custom-app DOM compatibility with Spotify 1.3.x**: the curated apps and Spicetify's own `lyrics-plus`/`reddit` were written against 1.2.x DOM ids (`main-topBar-topbarContentWrapper`, `.Root__main-view`, `.os-viewport`, `.os-resize-observer-host`). On 1.3.x those lookups return `null`, the app throws while rendering (`React error #200` from `createPortal(children, null)`, or a `null` deref on `clientWidth`/`offsetTop`) and Spotify shows the fatal dialog again. Each selector keeps the legacy form first and appends the 1.3.x fallback (`#global-nav-bar`, `.main-view-container__scroll-node`, `.main-view-container`) plus null guards, and both the app sources and the deployed route bundles are patched.
 
 ## 📚 Investigative Blog Articles (In-Depth Technical Deep Dive)
 

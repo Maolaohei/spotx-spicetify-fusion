@@ -40,6 +40,8 @@ param(
     [string]$SpotifyDir,
     [string]$JsHelperDir,
     [string]$I18nDir,
+    [string]$SpicetifyUserAppsDir,
+    [string]$SpicetifyCliAppsDir,
     [string]$ReportPath
 )
 
@@ -47,6 +49,7 @@ param(
 
 # This fork is the project the scripts and the docs all point to.
 $FusionRepoUrl = 'https://github.com/Maolaohei/spotx-spicetify-fusion'
+$FusionRepoRaw = 'https://raw.githubusercontent.com/Maolaohei/spotx-spicetify-fusion/main'
 
 $script:Results = New-Object System.Collections.Generic.List[object]
 
@@ -224,18 +227,94 @@ else {
     Add-Result -Patch "B1: Snackbar SyntaxError" -Status not-needed -Detail "not present (Spicetify >= 2.45 bundles are clean)"
 }
 
-# B2: Wrap useNavigateStable calls in a try/catch (legacy Marketplace white screen)
-$navPattern = 'return\(0,([A-Za-z_$][\w$]*)\.useNavigateStable\)\(\)'
-$navMatch = [regex]::Match($xpuiContent, $navPattern)
-if ($navMatch.Success) {
-    $navModule = $navMatch.Groups[1].Value
-    $safeNav = 'return(()=>{try{return(0,' + $navModule + '.useNavigateStable)()}catch(err){return Spicetify?.Platform?.History?.push||Spicetify?.Platform?.History?.navigate||(()=>({}))}})()'
-    $xpuiContent = $xpuiContent.Remove($navMatch.Index, $navMatch.Length).Insert($navMatch.Index, $safeNav)
-    $xpuiPatched = $true
-    Add-Result -Patch "B2: useNavigateStable fallback" -Status applied -Detail "wrapped (0,$navModule.useNavigateStable)()"
+# B2: Spicetify renders its custom-app navigation rows outside Spotify's React
+# providers, and two hooks on those rows then throw - taking the whole UI down
+# with Spotify's fatal "Something went wrong / Reload page" dialog whenever the
+# extra apps in the left sidebar are switched:
+#   1. useNavigateStable() -> "must be used within a StableUseNavigateProvider"
+#   2. the RemoteConfig context's default delegate -> "Please wrap your component
+#      in RemoteConfig Provider"
+# Both are replaced with provider-independent fallbacks. They only change what
+# happens when the provider is absent, so pages rendered inside the providers
+# behave exactly as before.
+$clientPatches = @(
+    @{
+        Name        = 'B2: useNavigateStable fallback'
+        Marker      = '/*fusion:nav*/'
+        Pattern     = 'if\(!e\)throw Error\("useNavigateStable must be used within a StableUseNavigateProvider"\);'
+        Replacement = 'if(!e)return(...p)=>{try{const h=globalThis.Spicetify?.Platform?.History;if(typeof p[0]==="number"){h?.go?.(p[0]);return}const f=h?.push??h?.replace;if(typeof f==="function")f(p[0])}catch(_){}};/*fusion:nav*/'
+        Detail      = 'hook falls back to Platform.History instead of throwing'
+        Legacy      = 'return\(0,([A-Za-z_$][\w$]*)\.useNavigateStable\)\(\)'
+        LegacyRepl  = 'return(()=>{try{return(0,$1.useNavigateStable)()}catch(err){return Spicetify?.Platform?.History?.push||Spicetify?.Platform?.History?.navigate||(()=>({}))}})()'
+    },
+    @{
+        Name        = 'B2: RemoteConfig fallback'
+        Marker      = '/*fusion:remoteconfig*/'
+        Pattern     = '\(0,(\w+)\.createContext\)\(new ([\w.]+)\.Delegate\(\(\)=>\{throw Error\("Please wrap your component in RemoteConfig Provider"\)\}\)\)'
+        Replacement = '(0,$1.createContext)(new $2.Delegate(()=>({getValue:e=>e&&typeof e==="object"&&"default"in e?e.default:void 0,toJSON:()=>({}),toBuilder:()=>null})))/*fusion:remoteconfig*/'
+        Detail      = 'missing RemoteConfig provider returns definition defaults instead of throwing'
+    },
+    @{
+        Name        = 'B3: RegistryContext fallback'
+        Marker      = '/*fusion:registry*/'
+        Pattern     = 'if\(null===e\)throw Error\("Trying to use ''RegistryContext'' without ''RegistryProvider''!"\);'
+        Replacement = 'if(null===e)e={resolve:()=>({getItem:()=>null,setItem:()=>{},getEvents:()=>({addListener(){},removeListener(){}})})};/*fusion:registry*/'
+        Detail      = 'missing RegistryProvider resolves to a no-op store instead of throwing'
+    }
+)
+
+foreach ($patch in $clientPatches) {
+    if ($xpuiContent.Contains($patch.Marker)) {
+        Add-Result -Patch $patch.Name -Status not-needed -Detail 'fallback already installed'
+    }
+    elseif ([regex]::IsMatch($xpuiContent, $patch.Pattern)) {
+        $xpuiContent = [regex]::Replace($xpuiContent, $patch.Pattern, $patch.Replacement, 1)
+        $xpuiPatched = $true
+        Add-Result -Patch $patch.Name -Status applied -Detail $patch.Detail
+    }
+    elseif ($patch.Legacy -and [regex]::IsMatch($xpuiContent, $patch.Legacy)) {
+        $xpuiContent = [regex]::Replace($xpuiContent, $patch.Legacy, $patch.LegacyRepl, 1)
+        $xpuiPatched = $true
+        Add-Result -Patch $patch.Name -Status applied -Detail 'legacy call site wrapped'
+    }
+    else {
+        Add-Result -Patch $patch.Name -Status failed -Detail 'anchor not found on this build'
+    }
+}
+
+# B2b: apply the same fallbacks to Spicetify's staging copies, so the next
+# `spicetify apply` re-emits them into the client instead of undoing them.
+$navStaged = 0
+$navStagingPaths = @(
+    (Join-Path $env:APPDATA "spicetify\Extracted\Raw\xpui\xpui.js"),
+    (Join-Path $env:APPDATA "spicetify\Extracted\Themed\xpui\xpui.js")
+)
+foreach ($stagingPath in $navStagingPaths) {
+    if (-not (Test-Path $stagingPath)) { continue }
+    $stagingContent = [System.IO.File]::ReadAllText($stagingPath, [System.Text.Encoding]::UTF8)
+    $stagingPatched = $false
+    foreach ($patch in $clientPatches) {
+        if ($stagingContent.Contains($patch.Marker)) { continue }
+        if (-not [regex]::IsMatch($stagingContent, $patch.Pattern)) {
+            if ($patch.Legacy -and [regex]::IsMatch($stagingContent, $patch.Legacy)) {
+                $stagingContent = [regex]::Replace($stagingContent, $patch.Legacy, $patch.LegacyRepl, 1)
+                $stagingPatched = $true
+            }
+            continue
+        }
+        $stagingContent = [regex]::Replace($stagingContent, $patch.Pattern, $patch.Replacement, 1)
+        $stagingPatched = $true
+    }
+    if ($stagingPatched) {
+        [System.IO.File]::WriteAllText($stagingPath, $stagingContent, (New-Object System.Text.UTF8Encoding($false)))
+        $navStaged++
+    }
+}
+if ($navStaged -gt 0) {
+    Add-Result -Patch "B2b: staged client copies" -Status applied -Detail "$navStaged Spicetify staging copy/copies patched (survives spicetify apply)"
 }
 else {
-    Add-Result -Patch "B2: useNavigateStable fallback" -Status not-needed -Detail "anchor absent (fixed on this build)"
+    Add-Result -Patch "B2b: staged client copies" -Status not-needed -Detail "no staging copy needed the patch"
 }
 
 # B3: RegistryContext safe guard (legacy Spotify 1.3.0 crash modal)
@@ -326,17 +405,48 @@ else {
     Write-Log "[INFO] xpui.js needs no patches on this build." "Cyan"
 }
 
-# SECTION C: Patch helper/spicetifyWrapper.js
-if (Test-Path $wrapperJs) {
-    Write-Log "[*] Inspecting helper\spicetifyWrapper.js..." "Cyan"
-    $wrapContent = [System.IO.File]::ReadAllText($wrapperJs, [System.Text.Encoding]::UTF8)
+# SECTION C: Patch helper/spicetifyWrapper.js - the copy deployed in the client
+#            AND Spicetify's own jsHelper template, so the next
+#            `spicetify apply` re-emits the fixed wrapper instead of undoing it.
+$WrapperDirs = New-Object System.Collections.Generic.List[string]
+if ($JsHelperDir) {
+    if (Test-Path $JsHelperDir) { $WrapperDirs.Add((Resolve-Path $JsHelperDir).Path) }
+}
+else {
+    $templateDir = Join-Path $env:LOCALAPPDATA "spicetify\jsHelper"
+    if (-not (Test-Path $templateDir)) {
+        $spicetifyCmd = Get-Command spicetify -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($spicetifyCmd) { $templateDir = Join-Path (Split-Path $spicetifyCmd.Source) "jsHelper" }
+    }
+    if (Test-Path $templateDir) { $WrapperDirs.Add($templateDir) }
+}
+$deployedHelperDir = Join-Path $SpotifyAppsDir "helper"
+if (Test-Path $deployedHelperDir) { $WrapperDirs.Add($deployedHelperDir) }
+
+$WrapperFiles = @()
+foreach ($dir in ($WrapperDirs | Select-Object -Unique)) {
+    $candidate = Join-Path $dir "spicetifyWrapper.js"
+    if (Test-Path $candidate) { $WrapperFiles += $candidate }
+}
+if ($WrapperFiles.Count -eq 0 -and (Test-Path $wrapperJs)) { $WrapperFiles += $wrapperJs }
+
+$c1Applied = 0
+$c1Native = 0
+$c1Unknown = 0
+$c2Applied = 0
+$c2Clean = 0
+$c2Unknown = 0
+
+foreach ($wrapperPath in ($WrapperFiles | Select-Object -Unique)) {
+    Write-Log "[*] Inspecting $wrapperPath..." "Cyan"
+    $wrapContent = [System.IO.File]::ReadAllText($wrapperPath, [System.Text.Encoding]::UTF8)
     $wrapPatched = $false
 
     # C1: window.rspackChunk hook - only for wrappers that do not ship it yet.
     # Note: 'rspackChunkclient_web' also contains 'rspackChunk', so the check
     # must exclude the legacy alias explicitly.
     if ($wrapContent -match 'rspackChunk(?!client_web)') {
-        Add-Result -Patch "C1: rspackChunk hook" -Status not-needed -Detail "wrapper already negotiates window.rspackChunk"
+        $c1Native++
     }
     else {
         $chunkTarget = 'window?.webpackChunkclient_web||window?.rspackChunkclient_web'
@@ -344,56 +454,72 @@ if (Test-Path $wrapperJs) {
         if ($wrapContent.Contains($chunkTarget)) {
             $wrapContent = $wrapContent.Replace($chunkTarget, $chunkFixed)
             $wrapPatched = $true
-            Add-Result -Patch "C1: rspackChunk hook" -Status applied -Detail "legacy wrapper patched"
+            $c1Applied++
         }
         else {
-            Add-Result -Patch "C1: rspackChunk hook" -Status failed -Detail "wrapper shape unknown; neither native nor legacy anchor found"
+            $c1Unknown++
         }
     }
 
-    # C2: legacy Spicetify.URI export - the modern wrapper resolves URI itself
-    $hasModernUri = $wrapContent -match 'URI\.fromString' -or $wrapContent -match 'waitForURI'
-    $legacyUriInjection = '(()=>{let u=f.find(m=>m?.NQG?.PLAYLIST_V2);if(u){let s=u.o_h("spotify:track:4uLU6hMCjMI75M1A2tKUQC")?.constructor;if(s){s.Type=u.NQG,s.from=u.o_h,s.fromString=u.Lce,s.idToHex=u.DY5,s.hexToId=u.dx2,Spicetify.URI=s}}})(),'
+    # C2: make the modern wrapper's URI resolver self-starting.
+    # waitForURI() only *waits* for Spicetify.URI and never creates it, so on
+    # builds where nothing else creates it (observed on Spotify 1.3.4) the
+    # resolver retries forever, Spicetify.URI stays undefined, and every
+    # extension that touches it throws at load time ("Cannot destructure
+    # property 'Type' of 'Spicetify.URI' as it is undefined" -> Spotify's fatal
+    # reload dialog). Creating the placeholder lets Spicetify's own finders fill
+    # Type/from/fromString/idToHex/hexToId plus the per-type isXxx helpers, which
+    # is build-independent - unlike the name-based legacy injection.
     $legacyUriPattern = '\(\(\)=>\{let u=f\.find\(m=>m\?\.NQG\?\.PLAYLIST_V2\);.*?Spicetify\.URI=s\}\}\)\(\)\,?'
+    if ($wrapContent.Contains('Spicetify.URI=s')) {
+        $cleaned = [regex]::Replace($wrapContent, $legacyUriPattern, '')
+        if ($cleaned -ne $wrapContent) {
+            $wrapContent = $cleaned
+            $wrapPatched = $true
+            $c2Applied++
+        }
+    }
 
-    if ($hasModernUri) {
-        if ($wrapContent.Contains('Spicetify.URI=s')) {
-            $cleaned = [regex]::Replace($wrapContent, $legacyUriPattern, '')
-            if ($cleaned -ne $wrapContent) {
-                $wrapContent = $cleaned
-                $wrapPatched = $true
-                Add-Result -Patch "C2: Spicetify.URI export" -Status applied -Detail "removed obsolete legacy URI injection left by older fix.ps1 runs"
-            }
-            else {
-                Add-Result -Patch "C2: Spicetify.URI export" -Status skipped -Detail "legacy marker present but could not be removed cleanly"
-            }
-        }
-        else {
-            Add-Result -Patch "C2: Spicetify.URI export" -Status not-needed -Detail "wrapper resolves URI natively"
-        }
+    $uriWaitPattern = 'if\(!Spicetify\.URI\)\{setTimeout\(\(\)=>[\w$]+\([\w$]+\+1\),Math\.min\(10\*2\*\*Math\.min\([\w$]+,6\),500\)\);return\}'
+    if ([regex]::IsMatch($wrapContent, $uriWaitPattern)) {
+        $wrapContent = [regex]::Replace($wrapContent, $uriWaitPattern, 'if(!Spicetify.URI)Spicetify.URI={};', 1)
+        $wrapPatched = $true
+        $c2Applied++
+    }
+    elseif ($wrapContent.Contains('if(!Spicetify.URI)Spicetify.URI={};')) {
+        $c2Clean++
     }
     else {
-        $uriTarget = 'Spicetify.React=f.find(m=>m?.useMemo),'
-        if ($wrapContent.Contains($uriTarget) -and -not $wrapContent.Contains('Spicetify.URI=s')) {
-            $wrapContent = $wrapContent.Replace($uriTarget, $uriTarget + $legacyUriInjection)
-            $wrapPatched = $true
-            Add-Result -Patch "C2: Spicetify.URI export" -Status applied -Detail "legacy wrapper patched"
-        }
-        else {
-            Add-Result -Patch "C2: Spicetify.URI export" -Status failed -Detail "wrapper shape unknown; legacy anchor not found"
-        }
+        $c2Unknown++
     }
 
     if ($wrapPatched) {
-        [System.IO.File]::WriteAllText($wrapperJs, $wrapContent, (New-Object System.Text.UTF8Encoding($false)))
-        Write-Log "[SUCCESS] spicetifyWrapper.js successfully patched!" "Green"
+        [System.IO.File]::WriteAllText($wrapperPath, $wrapContent, (New-Object System.Text.UTF8Encoding($false)))
+        Write-Log "[SUCCESS] Patched $wrapperPath" "Green"
     }
     else {
-        Write-Log "[INFO] spicetifyWrapper.js needs no patches on this build." "Cyan"
+        Write-Log "[INFO] $wrapperPath needs no patches on this build." "Cyan"
     }
 }
+
+if ($c1Applied -gt 0) {
+    Add-Result -Patch "C1: rspackChunk hook" -Status applied -Detail "$c1Applied wrapper(s) patched (templates included)"
+}
+elseif ($c1Native -gt 0) {
+    Add-Result -Patch "C1: rspackChunk hook" -Status not-needed -Detail "$c1Native wrapper(s) already negotiate window.rspackChunk"
+}
 else {
-    Add-Result -Patch "C1/C2: spicetifyWrapper.js" -Status skipped -Detail "helper\spicetifyWrapper.js not found (set expose_apis=1 and run 'spicetify apply')"
+    Add-Result -Patch "C1: rspackChunk hook" -Status failed -Detail "no wrapper matched a known shape"
+}
+
+if ($c2Applied -gt 0) {
+    Add-Result -Patch "C2: URI self-start" -Status applied -Detail "$c2Applied wrapper(s) patched (templates included)"
+}
+elseif ($c2Clean -gt 0) {
+    Add-Result -Patch "C2: URI self-start" -Status not-needed -Detail "$c2Clean wrapper(s) already patched"
+}
+else {
+    Add-Result -Patch "C2: URI self-start" -Status failed -Detail "wrapper anchor not found; URI may stay undefined for extensions"
 }
 
 # SECTION D: Fix custom apps push headers in spicetify-routes-*.js
@@ -428,6 +554,113 @@ if ($routeFiles.Count -gt 0) {
 }
 else {
     Add-Result -Patch "D: route push headers" -Status skipped -Detail "no spicetify-routes-*.js bundles found"
+}
+
+# Directories the custom-app patches work on (overridable for testing).
+$userAppsDir = if ($SpicetifyUserAppsDir) { $SpicetifyUserAppsDir } else { Join-Path $env:APPDATA 'spicetify\CustomApps' }
+$cliAppsDir = if ($SpicetifyCliAppsDir) { $SpicetifyCliAppsDir } else { Join-Path $env:LOCALAPPDATA 'spicetify\CustomApps' }
+
+# SECTION D2: custom-app compatibility with Spotify 1.3.x
+#   Spicetify's own apps and the curated ones were written against Spotify 1.2.x
+#   DOM ids. On 1.3.x those selectors return null, the app throws while rendering
+#   and React replaces the whole UI with Spotify's fatal "Something went wrong /
+#   Reload page" dialog - reproducible by switching between the extra apps in
+#   the left sidebar. Every patch below keeps the legacy selector first (1.2.x
+#   behaviour is untouched) and appends the 1.3.x fallback / null guard.
+$appPatchSet = @{
+    'topbar' = @{
+        Name   = 'D2: app top-bar container'
+        Marker = '/*fusion:topbar*/'
+        Old    = 'document.querySelector(".main-topBar-topbarContentWrapper")'
+        New    = '(document.querySelector(".main-topBar-topbarContentWrapper") || document.querySelector("#global-nav-bar .custom-navlinks-scrollable_container") || document.querySelector("#global-nav-bar") || document.body)/*fusion:topbar*/'
+    }
+    'viewportChain' = @{
+        Name   = 'D2: lyrics-plus main-view selectors'
+        Marker = '/*fusion:vp*/'
+        Old    = 'document.querySelector(".Root__main-view .os-viewport") ?? document.querySelector(".Root__main-view .main-view-container__scroll-node")'
+        New    = 'document.querySelector(".main-view-container__scroll-node") ?? document.querySelector(".main-view-container") ?? document.body/*fusion:vp*/'
+    }
+    'viewportField' = @{
+        Name   = 'D2: lyrics-plus viewport field'
+        Marker = '(document.querySelector(".main-view-container .os-viewport") ?? document.querySelector(".main-view-container__scroll-node") ?? document.body)'
+        Old    = 'document.querySelector(".main-view-container .os-viewport")'
+        New    = '(document.querySelector(".main-view-container .os-viewport") ?? document.querySelector(".main-view-container__scroll-node") ?? document.body)'
+    }
+    'offsetTop' = @{
+        Name   = 'D2: lyrics-plus main-view offset'
+        Marker = '?? document.querySelector(".main-view-container") ?? document.body).offsetTop'
+        Old    = 'document.querySelector(".Root__main-view").offsetTop'
+        New    = '((document.querySelector(".Root__main-view") ?? document.querySelector(".main-view-container") ?? document.body).offsetTop)'
+    }
+    'resizeSel' = @{
+        Name   = 'D2: app resize-host selector'
+        Marker = '.main-view-container__scroll-node, .main-view-container"'
+        Old    = '".Root__main-view .os-resize-observer-host, .Root__main-view .os-size-observer, .Root__main-view .main-view-container__scroll-node"'
+        New    = '".Root__main-view .os-resize-observer-host, .Root__main-view .os-size-observer, .Root__main-view .main-view-container__scroll-node, .main-view-container__scroll-node, .main-view-container"'
+    }
+    'resizeInit' = @{
+        Name   = 'D2: app resize-host null guard'
+        Marker = 'useState(resizeHost?.clientWidth ?? 0)'
+        Old    = 'useState(resizeHost.clientWidth)'
+        New    = 'useState(resizeHost?.clientWidth ?? 0)'
+    }
+    'resizeHandler' = @{
+        Name   = 'D2: app resize-handler null guard'
+        Marker = 'setWindowSize(resizeHost?.clientWidth ?? 0)'
+        Old    = 'setWindowSize(resizeHost.clientWidth)'
+        New    = 'setWindowSize(resizeHost?.clientWidth ?? 0)'
+    }
+    'observe' = @{
+        Name   = 'D2: app ResizeObserver guard'
+        Marker = 'if (resizeHost) observer.observe(resizeHost);'
+        Old    = 'observer.observe(resizeHost);'
+        New    = 'if (resizeHost) observer.observe(resizeHost);'
+    }
+}
+
+$appTargets = @(
+    @{ Path = (Join-Path $userAppsDir 'stats\index.js'); Patches = @('topbar') },
+    @{ Path = (Join-Path $userAppsDir 'marketplace\index.js'); Patches = @('topbar') },
+    @{ Path = (Join-Path $cliAppsDir 'lyrics-plus\index.js'); Patches = @('topbar', 'viewportChain', 'viewportField', 'offsetTop') },
+    @{ Path = (Join-Path $cliAppsDir 'lyrics-plus\TabBar.js'); Patches = @('resizeSel', 'resizeInit', 'resizeHandler', 'observe') },
+    @{ Path = (Join-Path $cliAppsDir 'reddit\TabBar.js'); Patches = @('resizeSel', 'resizeInit', 'resizeHandler', 'observe') },
+    @{ Path = (Join-Path $SpotifyAppsDir 'spicetify-routes-stats.js'); Patches = @('topbar') },
+    @{ Path = (Join-Path $SpotifyAppsDir 'spicetify-routes-marketplace.js'); Patches = @('topbar') },
+    @{ Path = (Join-Path $SpotifyAppsDir 'spicetify-routes-lyrics-plus.js'); Patches = @('topbar', 'viewportChain', 'viewportField', 'offsetTop', 'resizeSel', 'resizeInit', 'resizeHandler', 'observe') }
+)
+
+$appPatchStats = @{}
+foreach ($key in $appPatchSet.Keys) { $appPatchStats[$key] = 0 }
+$appFilesTouched = 0
+foreach ($target in $appTargets) {
+    if (-not (Test-Path $target.Path)) { continue }
+    $content = [System.IO.File]::ReadAllText($target.Path, [System.Text.Encoding]::UTF8)
+    $changed = $false
+    foreach ($key in $target.Patches) {
+        $patch = $appPatchSet[$key]
+        if ($content.Contains($patch.Marker)) { continue }
+        if (-not $content.Contains($patch.Old)) { continue }
+        $content = $content.Replace($patch.Old, $patch.New)
+        $appPatchStats[$key]++
+        $changed = $true
+    }
+    if ($changed) {
+        [System.IO.File]::WriteAllText($target.Path, $content, (New-Object System.Text.UTF8Encoding($false)))
+        $appFilesTouched++
+    }
+}
+
+foreach ($key in $appPatchSet.Keys) {
+    $name = $appPatchSet[$key].Name
+    if ($appPatchStats[$key] -gt 0) {
+        Add-Result -Patch $name -Status applied -Detail "$($appPatchStats[$key]) file(s) patched for Spotify 1.3.x"
+    }
+    elseif ($appFilesTouched -gt 0 -or (Test-Path $userAppsDir) -or (Test-Path $cliAppsDir)) {
+        Add-Result -Patch $name -Status not-needed -Detail "no unpatched occurrence found"
+    }
+    else {
+        Add-Result -Patch $name -Status skipped -Detail "no Spicetify CustomApps directory found"
+    }
 }
 
 # SECTION E: Chinese UI for Spicetify's helper panels

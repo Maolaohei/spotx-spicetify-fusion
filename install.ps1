@@ -388,10 +388,11 @@ Grant-ChromiumLocalNetworkAccess
 
 # Launch Spotify in background to initialize browser cache and local database
 Write-Host "  -> Launching Spotify to initialize profile and runtime..." -ForegroundColor Cyan
-$spotifyExe = "$env:APPDATA\Spotify\Spotify.exe"
-if (-not (Test-Path $spotifyExe)) {
-    $spotifyExe = "$env:LOCALAPPDATA\Spotify\Spotify.exe"
+$SpotifyDir = Join-Path $env:APPDATA "Spotify"
+if (-not (Test-Path $SpotifyDir)) {
+    $SpotifyDir = Join-Path $env:LOCALAPPDATA "Spotify"
 }
+$spotifyExe = Join-Path $SpotifyDir "Spotify.exe"
 if (Test-Path $spotifyExe) {
     Start-Process -FilePath $spotifyExe -ErrorAction SilentlyContinue
 }
@@ -531,9 +532,9 @@ if (-not (Test-Path $xpuiJsPath)) {
 }
 
 # 6. Launch Patched Spotify Client
-if (Test-Path $SpotifyExe) {
+if (Test-Path $spotifyExe) {
     Write-Host "  -> Launching patched Spotify..." -ForegroundColor Cyan
-    Start-Process -FilePath $SpotifyExe
+    Start-Process -FilePath $spotifyExe
 }
 
 if ($script:FailedSteps.Count -eq 0) {
