@@ -6,13 +6,18 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT License"></a>
-  <a href="https://github.com/ZGQ-inc/spotx-spicetify-fusion/releases"><img src="https://img.shields.io/badge/Spotify-v1.2.x%20%7C%20v1.3.x%20(Rspack)-1DB954?logo=spotify" alt="Spotify Support"></a>
+  <a href="https://github.com/Maolaohei/spotx-spicetify-fusion/releases"><img src="https://img.shields.io/badge/Spotify-v1.2.x%20%7C%20v1.3.x%20(Rspack)-1DB954?logo=spotify" alt="Spotify Support"></a>
   <a href="https://spicetify.app"><img src="https://img.shields.io/badge/Spicetify-v2.45%2B-orange" alt="Spicetify"></a>
   <a href="https://github.com/SpotX-Official/SpotX"><img src="https://img.shields.io/badge/SpotX-Compatible-brightgreen" alt="SpotX"></a>
 </p>
 
 > [!NOTE]
 > **Language**: **English** | [中文](README_ZH.md)
+>
+> **This is a maintained fork** of [ZGQ-inc/spotx-spicetify-fusion](https://github.com/ZGQ-inc/spotx-spicetify-fusion).
+> Install commands below run the scripts **from this fork** (https://github.com/Maolaohei/spotx-spicetify-fusion), which keep the
+> SpotX / Spicetify flow working with the current upstream releases
+> (Spotify 1.3.4, Spicetify 2.45.3). Upstream credits and blog articles are kept as attribution.
 
 Seamlessly merge **[SpotX](https://github.com/SpotX-Official/SpotX)** (clean audio ad-blocking, podcast cleaner, visual tweaks) and **[Spicetify](https://spicetify.app)** (custom themes, JavaScript extensions, Marketplace, dev tools) without black screens, missing apps, or broken routes.
 
@@ -27,13 +32,13 @@ If you already installed Spotify, SpotX, and Spicetify, but encountered **Market
 #### Windows
 
 ```powershell
-iwr -useb https://spicetify.zgqinc.gq/fix.ps1 | iex
+iwr -useb https://raw.githubusercontent.com/Maolaohei/spotx-spicetify-fusion/main/fix.ps1 | iex
 ```
 
 #### Linux
 
 ```bash
-curl -fsSL https://spicetify.zgqinc.gq/fix.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Maolaohei/spotx-spicetify-fusion/main/fix.sh | bash
 ```
 
 ### 2. All-in-One One-Click Lazy Installer
@@ -43,13 +48,13 @@ To install a clean Spotify client, apply SpotX core ad-blocking, install Spiceti
 #### Windows
 
 ```powershell
-iwr -useb https://spicetify.zgqinc.gq/install.ps1 | iex
+iwr -useb https://raw.githubusercontent.com/Maolaohei/spotx-spicetify-fusion/main/install.ps1 | iex
 ```
 
 #### Linux
 
 ```bash
-curl -fsSL https://spicetify.zgqinc.gq/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Maolaohei/spotx-spicetify-fusion/main/install.sh | bash
 ```
 
 ### 3. Optional: Install Curated Custom Apps & Extensions
@@ -59,17 +64,23 @@ If you want popular third-party apps (**Enhancify**, **Stats** with modern layou
 #### Windows
 
 ```powershell
-iwr -useb https://spicetify.zgqinc.gq/custom-apps.ps1 | iex
+iwr -useb https://raw.githubusercontent.com/Maolaohei/spotx-spicetify-fusion/main/custom-apps.ps1 | iex
 ```
 
 #### Linux
 
 ```bash
-curl -fsSL https://spicetify.zgqinc.gq/custom-apps.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Maolaohei/spotx-spicetify-fusion/main/custom-apps.sh | bash
 ```
 
-* **Pre-configured Backup (Includes [fix.css](fix.css) UI Patches):** [Download Backup.json](https://spicetify.zgqinc.gq/Marketplace-backup.json)
+* **Pre-configured Backup (Includes [fix.css](fix.css) UI Patches):** [Download Backup.json](https://raw.githubusercontent.com/Maolaohei/spotx-spicetify-fusion/main/Marketplace-backup.json)
   *(Import Guide: Top Navigation `Marketplace` -> Top Right `Marketplace Settings` -> Bottom `Back up/Restore` -> `Open` -> `Import from file`. This backup already incorporates the [fix.css](fix.css) layout patches and popular themes out-of-the-box)*
+
+> [!NOTE]
+> Some endpoint security suites (verified with Huorong 火绒) quarantine `custom-apps.ps1`
+> the moment a PowerShell process reads it, because it downloads and unpacks third-party app
+> bundles. If the file disappears after running it, restore it with
+> `git checkout -- custom-apps.ps1` and whitelist the script or the repository folder.
 
 ## 🔄 Dependency Drift Self-Check (Spotify / SpotX / Spicetify)
 
@@ -100,7 +111,9 @@ it downloads the pinned Spotify installer, extracts it to a temp sandbox
 (`/extract` only - no registry, no `%APPDATA%\Spotify` client), runs the real
 SpotX against it, applies Spicetify 2.45.3 + Marketplace with `spicetify -n`
 (never launches the client), runs `fix.ps1 -SpotifyDir <sandbox>` and asserts
-that an already-correct bundle is left byte-identical. The result is written to
+that an already-correct bundle is left byte-identical. It also verifies that
+every script banner, issue link and README one-liner points at this fork and
+that the published raw URLs resolve (40 assertions). The result is written to
 `verify-out/offline-e2e.json`.
 
 ```powershell

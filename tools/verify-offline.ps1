@@ -337,7 +337,61 @@ finally {
 Assert-That "install.ps1 -VerifyOnly exit code 0" ($verifyExit -eq 0) -Detail "log: $work\install-verify.log"
 
 # ---------------------------------------------------------------------------
-# 7. Artifact
+# 7. Project links: every script and doc must point at this fork
+# ---------------------------------------------------------------------------
+Write-Step "Verifying project links"
+$expectedRepo = 'https://github.com/Maolaohei/spotx-spicetify-fusion'
+$expectedRaw = 'https://raw.githubusercontent.com/Maolaohei/spotx-spicetify-fusion/main'
+
+$linkChecks = @(
+    @{ File = 'install.ps1'; Name = 'FusionRepoUrl'; Pattern = '\$FusionRepoUrl\s*=\s*''([^'']+)'''; Expect = $expectedRepo },
+    @{ File = 'install.ps1'; Name = 'FusionRepoRaw'; Pattern = '\$FusionRepoRaw\s*=\s*''([^'']+)'''; Expect = $expectedRaw },
+    @{ File = 'install.sh'; Name = 'FUSION_REPO_URL'; Pattern = 'FUSION_REPO_URL="([^"]+)"'; Expect = $expectedRepo },
+    @{ File = 'install.sh'; Name = 'FUSION_REPO_RAW'; Pattern = 'FUSION_REPO_RAW="([^"]+)"'; Expect = $expectedRaw },
+    @{ File = 'fix.ps1'; Name = 'FusionRepoUrl'; Pattern = '\$FusionRepoUrl\s*=\s*''([^'']+)'''; Expect = $expectedRepo },
+    @{ File = 'fix.sh'; Name = 'FUSION_REPO_URL'; Pattern = 'FUSION_REPO_URL="([^"]+)"'; Expect = $expectedRepo }
+)
+foreach ($check in $linkChecks) {
+    $content = [System.IO.File]::ReadAllText((Join-Path $RepoRoot $check.File))
+    $m = [regex]::Match($content, $check.Pattern)
+    $value = if ($m.Success) { $m.Groups[1].Value } else { '<missing>' }
+    Assert-That "$($check.File): $($check.Name) = fork URL" ($value -eq $check.Expect) -Detail $value
+}
+
+# Scripts may only mention the upstream repo in an attribution comment. This runs
+# through git grep on purpose: some endpoint security products quarantine
+# custom-apps.ps1 as soon as a PowerShell process opens it.
+$grepOutput = & git -C $RepoRoot grep -n -E 'ZGQ-inc/spotx-spicetify-fusion' -- install.ps1 install.sh fix.ps1 fix.sh custom-apps.ps1 custom-apps.sh fix-marketplace-nav.ps1 2>$null
+$stale = @()
+foreach ($line in @($grepOutput)) {
+    if ($line -match 'Upstream|MIT') { continue }
+    $stale += $line
+}
+Assert-That "scripts only cite upstream as attribution" ($stale.Count -eq 0) -Detail $(if ($stale.Count) { $stale -join '; ' } else { 'no stale upstream links' })
+
+# Docs: the one-liners must use this fork and no longer the upstream proxy domain.
+foreach ($doc in @('README.md', 'README_ZH.md')) {
+    $d = [System.IO.File]::ReadAllText((Join-Path $RepoRoot $doc))
+    $cmdCount = ([regex]::Matches($d, [regex]::Escape("$expectedRaw/"))).Count
+    Assert-That "$doc uses the fork raw URLs" ($cmdCount -ge 6 -and -not $d.Contains('spicetify.zgqinc.gq')) -Detail "$cmdCount command link(s), no proxy domain"
+}
+
+# Published URLs must resolve (the raw branch is the one users install from).
+foreach ($published in @('fix.ps1', 'fix.sh', 'install.ps1', 'install.sh', 'custom-apps.ps1', 'custom-apps.sh', 'Marketplace-backup.json')) {
+    $url = "$expectedRaw/$published"
+    $status = 0
+    try {
+        $resp = Invoke-WebRequest -Uri $url -Method Head -UseBasicParsing -TimeoutSec 30
+        $status = [int]$resp.StatusCode
+    }
+    catch {
+        $status = if ($_.Exception.Response) { [int]$_.Exception.Response.StatusCode } else { 0 }
+    }
+    Assert-That "published: $published" ($status -eq 200) -Detail "HTTP $status"
+}
+
+# ---------------------------------------------------------------------------
+# 8. Artifact
 # ---------------------------------------------------------------------------
 Write-Step "Writing artifact"
 $artifact = [PSCustomObject]@{
