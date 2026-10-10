@@ -71,6 +71,64 @@ curl -fsSL https://spicetify.zgqinc.gq/custom-apps.sh | bash
 * **Pre-configured Backup (Includes [fix.css](fix.css) UI Patches):** [Download Backup.json](https://spicetify.zgqinc.gq/Marketplace-backup.json)
   *(Import Guide: Top Navigation `Marketplace` -> Top Right `Marketplace Settings` -> Bottom `Back up/Restore` -> `Open` -> `Import from file`. This backup already incorporates the [fix.css](fix.css) layout patches and popular themes out-of-the-box)*
 
+## 🔄 Dependency Drift Self-Check (Spotify / SpotX / Spicetify)
+
+This suite patches two moving targets, so every bypass and every bundle patch is
+**verified before it is applied**. When upstream renames a switch or Spotify
+changes a bundle, the scripts report it instead of hanging on a prompt or writing
+a patch into the wrong place.
+
+### Installer bypass check (no install)
+
+```powershell
+# Windows - validates every SpotX / Spicetify / Marketplace rewrite
+.\install.ps1 -VerifyOnly
+```
+
+```bash
+# Linux
+bash install.sh --verify-only
+```
+
+The check prints each rule together with the SHA-256 of the upstream script it
+was verified against; a changed prompt fails the check loudly.
+
+### Offline end-to-end verification (Windows, no install)
+
+`tools/verify-offline.ps1` rebuilds the whole pipeline from shipped artifacts:
+it downloads the pinned Spotify installer, extracts it to a temp sandbox
+(`/extract` only - no registry, no `%APPDATA%\Spotify` client), runs the real
+SpotX against it, applies Spicetify 2.45.3 + Marketplace with `spicetify -n`
+(never launches the client), runs `fix.ps1 -SpotifyDir <sandbox>` and asserts
+that an already-correct bundle is left byte-identical. The result is written to
+`verify-out/offline-e2e.json`.
+
+```powershell
+pwsh tools/verify-offline.ps1
+```
+
+`tools/verify-shell-patches.sh` covers the shared Python pipeline used by
+`fix.sh` / `install.sh` with synthetic legacy and modern bundles:
+
+```bash
+bash tools/verify-shell-patches.sh
+```
+
+### Verification matrix (2026-10-11)
+
+| Component | Version | Result |
+| :--- | :--- | :--- |
+| Spotify (Windows x64) | `1.3.4.258.gc60b10b0946a` | extracted, SpotX-patched and verified offline |
+| SpotX | `main`, version bumped to 1.3.4 | all 15 original flags still accepted; Spicetify guards neutralised |
+| Spicetify CLI | `v2.45.3` | `backup apply` succeeds on 1.3.4; custom apps registered natively |
+| Marketplace | latest release | route bundle, chunk map and CSS allowlist verified |
+
+On **Spotify 1.3.4 + Spicetify 2.45.3** the only patch that still has work to do
+is the snapshot filename casing (`V8_context_snapshot.bin` -> `v8_context_snapshot.bin`).
+The legacy `Snackbar` / `useNavigateStable` / `RegistryContext` / chunk-map /
+wrapper patches are probed and reported as `not-needed`, because Spicetify 2.45+
+handles Rspack custom apps natively.
+
 ## 🎯 Why Combine SpotX and Spicetify?
 
 | Feature | SpotX Alone | Spicetify Alone | SpotX + Spicetify (Unified) |
@@ -81,7 +139,7 @@ curl -fsSL https://spicetify.zgqinc.gq/custom-apps.sh | bash
 | **Custom Themes & CSS Injections** | ❌ None | ✅ Unlimited | ✅ **Unlimited Themes** |
 | **Marketplace (App Store for Spotify)** | ❌ None | ✅ Full Access | ✅ **Restored & Working** |
 | **Extensions (Popup Lyrics, Stats, etc.)** | ❌ None | ✅ Huge Ecosystem | ✅ **Fully Compatible** |
-| **Spotify 1.3.0 Rspack Support** | ❌ Blackscreen Bug | ❌ SyntaxError Crash | ✅ **Zero Crash / Fixed** |
+| **Spotify 1.3.x Rspack Support** | ❌ Blackscreen Bug | ❌ SyntaxError Crash | ✅ **Zero Crash / Fixed (verified on 1.3.4)** |
 
 Combining both gives you the **ultimate Spotify PC desktop experience**. Unfortunately, due to personal feuds and conflicting patch logic between their maintainers, users were left stranded. This repository fixes that once and for all.
 
@@ -133,7 +191,7 @@ From SpotX v1.5 onwards, SpotX stopped using external DLLs and started directly 
 
 ## 🛠️ How the Unified Hotfix Works
 
-The script [fix.ps1](fix.ps1) intelligently inspects your Spotify client and applies surgical AST & byte-level patches:
+The script [fix.ps1](fix.ps1) intelligently inspects your Spotify client and applies surgical AST & byte-level patches. Every patch is probed against the actual bundle first: anchors that no longer exist (upstream fix, new Spotify build) are reported as `not-needed` and nothing is written, so a working client is never corrupted by a stale patch.
 
 ```mermaid
 graph TD

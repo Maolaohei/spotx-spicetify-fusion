@@ -71,6 +71,49 @@ curl -fsSL https://spicetify.zgqinc.gq/custom-apps.sh | bash
 * **懒人美化配置文件备份（已直接内置包含 [fix.css](fix.css)）：** [点击下载 Backup.json](https://spicetify.zgqinc.gq/Marketplace-backup.json)
   *(导入方法：顶部导航栏 `Marketplace` -> 右上角 `Marketplace Settings` -> 最底部 `Back up/Restore` -> `Open` -> `Import from file`。该备份已完整打包常用美化配置及全套 [fix.css](fix.css) 样式补丁，导入即可直接生效)*
 
+## 🔄 依赖漂移自检（Spotify / SpotX / Spicetify）
+
+本项目打的两个目标都在持续变动，所以**每一条绕过与每一个补丁都会先探测再应用**。上游改了参数名、或 Spotify 改了打包结构时，脚本会明确报错/标记，而不是卡在交互提示上，或者把补丁写到错误的位置。
+
+### 安装器绕过自检（不安装，仅联网）
+
+```powershell
+# Windows：逐条校验对 SpotX / Spicetify / Marketplace 安装脚本的改写
+.\install.ps1 -VerifyOnly
+```
+
+```bash
+# Linux
+bash install.sh --verify-only
+```
+
+自检会输出每条规则及其校验时的上游脚本 SHA-256；上游提示语一改，就会直接 FAIL。
+
+### 离线端到端验证（Windows，不安装）
+
+`tools/verify-offline.ps1` 会用已发布的固定工件把整条流水线重跑一遍：下载固定版本的 Spotify 安装包，仅用 `/extract` 解包到临时沙箱（不写注册表、不产生 `%APPDATA%\Spotify`），用真实 SpotX 给它打补丁，再用 `spicetify -n`（**不会启动客户端**）应用 Spicetify 2.45.3 + Marketplace，最后用 `fix.ps1 -SpotifyDir <沙箱>` 处理，并断言“本来就正确”的 bundle 保持字节不变。结果写入 `verify-out/offline-e2e.json`。
+
+```powershell
+pwsh tools/verify-offline.ps1
+```
+
+`tools/verify-shell-patches.sh` 用新旧两种合成 bundle 覆盖 `fix.sh` / `install.sh` 共用的 Python 补丁管线：
+
+```bash
+bash tools/verify-shell-patches.sh
+```
+
+### 当前验证矩阵（2026-10-11）
+
+| 组件 | 版本 | 结果 |
+| :--- | :--- | :--- |
+| Spotify (Windows x64) | `1.3.4.258.gc60b10b0946a` | 已解包、已由 SpotX 打补丁、离线验证通过 |
+| SpotX | `main`（版本号已提到 1.3.4） | 原有 15 个参数仍全部可用；Spicetify 拦截提示已消除 |
+| Spicetify CLI | `v2.45.3` | 在 1.3.4 上 `backup apply` 成功；自定义应用由其原生注册 |
+| Marketplace | 最新 release | 路由 bundle、chunk map 与 CSS 白名单均已验证 |
+
+在 **Spotify 1.3.4 + Spicetify 2.45.3** 上，真正还需要动的只剩快照文件名大小写（`V8_context_snapshot.bin` -> `v8_context_snapshot.bin`）；旧的 `Snackbar` / `useNavigateStable` / `RegistryContext` / chunk map / wrapper 补丁都会被探测并标记为 `not-needed`（Spicetify 2.45+ 已原生处理 Rspack 自定义应用）。
+
 ## 🎯 为什么要同时使用 SpotX 和 Spicetify？
 
 | 功能特性 | 仅装 SpotX | 仅装 Spicetify | SpotX + Spicetify（强强联手） |
@@ -81,7 +124,7 @@ curl -fsSL https://spicetify.zgqinc.gq/custom-apps.sh | bash
 | **自定义 CSS / 主题美化** | ❌ 完全不支持 | ✅ 支持海量主题 | ✅ **随心所欲换肤** |
 | **Marketplace 应用市场** | ❌ 无 | ✅ 原生支持 | ✅ **修复完好，正常浏览下载** |
 | **各类高级插件（歌词、统计等）** | ❌ 无 | ✅ 生态繁荣 | ✅ **全部正常运作** |
-| **Spotify 1.3.0 Rspack 兼容** | ❌ 假修复导致黑屏 | ❌ 版本判断 Bug 崩溃 | ✅ **全网首发完美运行，零黑屏** |
+| **Spotify 1.3.x Rspack 兼容** | ❌ 假修复导致黑屏 | ❌ 版本判断 Bug 崩溃 | ✅ **全网首发完美运行，零黑屏（已在 1.3.4 验证）** |
 
 二者结合是 PC 端享受 Spotify 最完美的形态。然而长期以来，由于两边维护者的个人恩怨与互相排斥，用户不仅无法得到官方支持，甚至沦为互相踢皮球的受害者。本项目从根本上终结了这一乱象。
 
@@ -133,7 +176,7 @@ curl -fsSL https://spicetify.zgqinc.gq/custom-apps.sh | bash
 
 ## 🛠️ 统一兼容补丁技术原理
 
-统一脚本 [fix.ps1](fix.ps1) / [fix.sh](fix.sh) 会在本地自动检测当前客户端版本与打包架构，并执行精细化 AST 与二进制级别重构：
+统一脚本 [fix.ps1](fix.ps1) / [fix.sh](fix.sh) 会在本地自动检测当前客户端版本与打包架构，并执行精细化 AST 与二进制级别重构。每个补丁都会先探测真实 bundle：锚点已不存在（上游已修、或 Spotify 新版本已变）就标记为 `not-needed` 不写入，绝不会用过期补丁弄坏本来正常的客户端：
 
 ```mermaid
 graph TD

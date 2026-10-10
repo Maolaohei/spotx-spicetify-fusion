@@ -16,3 +16,7 @@ Desktop.ini
 # Editor
 .vscode/
 .idea/
+
+# Verification artifacts (produced by tools/verify-offline.ps1)
+verify-out/
+.cache/
