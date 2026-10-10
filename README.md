@@ -57,6 +57,12 @@ iwr -useb https://raw.githubusercontent.com/Maolaohei/spotx-spicetify-fusion/mai
 curl -fsSL https://raw.githubusercontent.com/Maolaohei/spotx-spicetify-fusion/main/install.sh | bash
 ```
 
+> [!IMPORTANT]
+> Run these in a **normal shell window - never as Administrator/root**. Spicetify refuses to
+> run elevated (the files it writes can make Spotify show a black/blank window), so the
+> installers detect it and stop with instructions instead of leaving a half-applied install.
+> On Windows: open PowerShell normally, not via "Run as administrator".
+
 ### 3. Optional: Install Curated Custom Apps & Extensions
 
 If you want popular third-party apps (**Enhancify**, **Stats**, **Lyrics Plus**) and essential extensions, run the standalone custom apps installer:
@@ -121,7 +127,7 @@ SpotX against it, applies Spicetify 2.45.3 + Marketplace with `spicetify -n`
 (never launches the client), runs `fix.ps1 -SpotifyDir <sandbox>` and asserts
 that an already-correct bundle is left byte-identical. It also verifies that
 every script banner, issue link and README one-liner points at this fork and
-that the published raw URLs resolve (59 assertions). The result is written to
+that the published raw URLs resolve (74 assertions). The result is written to
 `verify-out/offline-e2e.json`.
 
 ```powershell
@@ -253,6 +259,7 @@ graph TD
 5. **Rspack Global Hooking**: Updates `spicetifyWrapper.js` to hook `window.rspackChunk || window.rspackChunkclient_web`, ensuring `Spicetify.React` and `Spicetify.ReactDOM` are correctly bound.
 6. **Dynamic `Spicetify.URI`**: Reconnects the URI parser directly from Spotify's internal module table.
 7. **1.2.x Marketplace route/nav/stylesheet restore** ([fix-marketplace-nav.ps1](fix-marketplace-nav.ps1)): re-applies the lazy chunk, `/marketplace/*` route, nav icon and `miniCss` allowlist into the `xpui.js` the client actually loads — and into Spicetify's staging copies so it survives `spicetify apply`. Root cause in the section below.
+8. **Chinese UI for Spicetify's helper panels**: Spicetify ships the **Experimental features**, **Home config** and **Sidebar config** panels in English only. Their visible labels (menu entries, `Up`/`Down`/`Stick`/`Lower`/`Hide`, the search box, the reset row, the notices) are translated into Chinese in both the CLI templates (so `spicetify apply` keeps the Chinese version) and the copies already deployed in the client. The replacement text is written as JS unicode escapes, which keeps the patch scripts pure ASCII. Opt out with `fix.ps1 -KeepEnglish` / `KEEP_ENGLISH=1 bash fix.sh`. Note: the *feature names and descriptions listed inside* the Experimental features panel come from Spotify's own remote config and stay English.
 
 ### Spotify 1.2.x: Marketplace icon / route missing after `spicetify apply` (root cause + standalone fix)
 

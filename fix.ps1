@@ -35,7 +35,10 @@ param(
     [switch]$Quiet,
     [switch]$LaunchSpotify,
     [switch]$Force,
+    [switch]$NoStop,
+    [switch]$KeepEnglish,
     [string]$SpotifyDir,
+    [string]$JsHelperDir,
     [string]$ReportPath
 )
 
@@ -105,14 +108,6 @@ Write-Log " SpotX + Spicetify Unified Compatibility Hotfix (v2.2)" "Cyan"
 Write-Log " Supports Spotify 1.2.x (Webpack) & 1.3.x+ (Rspack, tested 1.3.4)" "Cyan"
 Write-Log " GitHub: $FusionRepoUrl" "Cyan"
 
-# Terminate running Spotify processes
-$spotifyProcs = Get-Process -Name "Spotify" -ErrorAction SilentlyContinue
-if ($spotifyProcs) {
-    Write-Log "[*] Closing running Spotify process..." "Yellow"
-    $spotifyProcs | Stop-Process -Force
-    Start-Sleep -Milliseconds 800
-}
-
 # Locate Spotify & Spicetify directories
 if ($SpotifyDir) {
     $SpotifyDirResolved = $SpotifyDir
@@ -135,6 +130,18 @@ if (-not (Test-Path $SpotifyDirResolved)) {
 
 $SpotifyExe = Join-Path $SpotifyDirResolved "Spotify.exe"
 $SpotifyAppsDir = Join-Path $SpotifyDirResolved "Apps\xpui"
+
+# Terminate running Spotify processes so the patched bundles are not locked.
+# -NoStop is used by tooling that patches an offline copy; the check also keeps
+# a machine without a client in that directory from killing unrelated processes.
+if (-not $NoStop) {
+    $spotifyProcs = Get-Process -Name "Spotify" -ErrorAction SilentlyContinue
+    if ($spotifyProcs -and (Test-Path $SpotifyExe)) {
+        Write-Log "[*] Closing running Spotify process..." "Yellow"
+        $spotifyProcs | Stop-Process -Force
+        Start-Sleep -Milliseconds 800
+    }
+}
 $xpuiJs = Join-Path $SpotifyAppsDir "xpui.js"
 $wrapperJs = Join-Path $SpotifyAppsDir "helper\spicetifyWrapper.js"
 $indexHtml = Join-Path $SpotifyAppsDir "index.html"
@@ -422,7 +429,93 @@ else {
     Add-Result -Patch "D: route push headers" -Status skipped -Detail "no spicetify-routes-*.js bundles found"
 }
 
-# SECTION E: Verification & Launch
+# SECTION E: Chinese UI for Spicetify's helper panels
+#   "Experimental features", "Home config" and "Sidebar config" are Spicetify's
+#   own English-only helper scripts. Their visible labels are replaced with JS
+#   unicode escapes (kept ASCII here so the iwr|iex path stays safe). Both the
+#   CLI templates (so `spicetify apply` redeploys the Chinese version) and the
+#   copies deployed in the client are patched. Skip with -KeepEnglish.
+if ($KeepEnglish) {
+    Add-Result -Patch "E: Chinese UI" -Status skipped -Detail "disabled with -KeepEnglish"
+}
+else {
+    $chineseUi = @(
+        @{ File = 'expFeatures.js'; Edits = @(
+                @{ Old = '"Waiting for Spotify to finish loading..."'; New = '"\u6b63\u5728\u7b49\u5f85 Spotify \u52a0\u8f7d\u5b8c\u6210\u2026"' },
+                @{ Old = 'Using fallback mode. Some features may not work.'; New = '\u6b63\u5728\u4f7f\u7528\u517c\u5bb9\u6a21\u5f0f\uff0c\u90e8\u5206\u529f\u80fd\u53ef\u80fd\u4e0d\u53ef\u7528\u3002' },
+                @{ Old = 'placeholder="Search for a feature"'; New = 'placeholder="\u641c\u7d22\u529f\u80fd\u9879"' },
+                @{ Old = '"Experimental features"'; New = '"\u5b9e\u9a8c\u6027\u529f\u80fd"' },
+                @{ Old = '>Clear all cached features and preferences<'; New = '>\u6e05\u7a7a\u5df2\u7f13\u5b58\u7684\u529f\u80fd\u4e0e\u504f\u597d\u8bbe\u7f6e<' },
+                @{ Old = '>Reset</button>'; New = '>\u91cd\u7f6e</button>' }
+            ) },
+        @{ File = 'homeConfig.js'; Edits = @(
+                @{ Old = 'up.innerText = "Up";'; New = 'up.innerText = "\u4e0a\u79fb";' },
+                @{ Old = 'down.innerText = "Down";'; New = 'down.innerText = "\u4e0b\u79fb";' },
+                @{ Old = '"Unstick" : "Stick"'; New = '"\u53d6\u6d88\u7f6e\u9876" : "\u7f6e\u9876"' },
+                @{ Old = '"Unlower" : "Lower"'; New = '"\u53d6\u6d88\u7f6e\u5e95" : "\u7f6e\u5e95"' },
+                @{ Old = '"Home config"'; New = '"\u9996\u9875\u6392\u5e8f"' }
+            ) },
+        @{ File = 'sidebarConfig.js'; Edits = @(
+                @{ Old = 'up.innerText = "Up";'; New = 'up.innerText = "\u4e0a\u79fb";' },
+                @{ Old = 'down.innerText = "Down";'; New = 'down.innerText = "\u4e0b\u79fb";' },
+                @{ Old = '"Unstick" : "Stick"'; New = '"\u53d6\u6d88\u7f6e\u9876" : "\u7f6e\u9876"' },
+                @{ Old = '"Unhide" : "Hide"'; New = '"\u53d6\u6d88\u9690\u85cf" : "\u9690\u85cf"' },
+                @{ Old = '"Sidebar config"'; New = '"\u4fa7\u8fb9\u680f\u914d\u7f6e"' }
+            ) }
+    )
+
+    $helperDirs = New-Object System.Collections.Generic.List[string]
+    if ($JsHelperDir) {
+        if (Test-Path $JsHelperDir) { $helperDirs.Add((Resolve-Path $JsHelperDir).Path) }
+    }
+    else {
+        $templateDir = Join-Path $env:LOCALAPPDATA "spicetify\jsHelper"
+        if (-not (Test-Path $templateDir)) {
+            $spicetifyCmd = Get-Command spicetify -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($spicetifyCmd) { $templateDir = Join-Path (Split-Path $spicetifyCmd.Source) "jsHelper" }
+        }
+        if (Test-Path $templateDir) { $helperDirs.Add($templateDir) }
+    }
+    $deployedHelperDir = Join-Path $SpotifyAppsDir "helper"
+    if (Test-Path $deployedHelperDir) { $helperDirs.Add($deployedHelperDir) }
+
+    $uiApplied = 0
+    $uiTranslated = 0
+    $uiFiles = 0
+    $uiDrift = New-Object System.Collections.Generic.List[string]
+    foreach ($dir in ($helperDirs | Select-Object -Unique)) {
+        foreach ($entry in $chineseUi) {
+            $path = Join-Path $dir $entry.File
+            if (-not (Test-Path $path)) { continue }
+            $uiFiles++
+            $text = [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8)
+            $pending = @($entry.Edits | Where-Object { $text.Contains($_.Old) })
+            $done = @($entry.Edits | Where-Object { $text.Contains($_.New) })
+            if ($pending.Count -eq 0) {
+                if ($done.Count -gt 0) { $uiTranslated++ }
+                else { $uiDrift.Add("$([System.IO.Path]::GetFileName($path)) in $(Split-Path $dir -Leaf)") }
+                continue
+            }
+            foreach ($edit in $pending) { $text = $text.Replace($edit.Old, $edit.New) }
+            [System.IO.File]::WriteAllText($path, $text, (New-Object System.Text.UTF8Encoding($false)))
+            $uiApplied += $pending.Count
+        }
+    }
+    if ($uiApplied -gt 0) {
+        Add-Result -Patch "E: Chinese UI" -Status applied -Detail "$uiApplied label(s) translated (templates + deployed)"
+    }
+    elseif ($uiTranslated -gt 0) {
+        Add-Result -Patch "E: Chinese UI" -Status not-needed -Detail "helpers are already translated"
+    }
+    elseif ($uiFiles -eq 0) {
+        Add-Result -Patch "E: Chinese UI" -Status skipped -Detail "Spicetify helper scripts not found (features disabled?)"
+    }
+    else {
+        Add-Result -Patch "E: Chinese UI" -Status failed -Detail "helper shape changed: $($uiDrift -join ', ')"
+    }
+}
+
+# SECTION F: Verification & Launch
 $failed = @($script:Results | Where-Object { $_.Status -eq 'failed' })
 Write-Log " [OK] All SpotX + Spicetify compatibility patches processed!" "Green"
 if ($failed.Count -gt 0) {

@@ -124,6 +124,70 @@ def insert_after_once(content, anchor, insert):
         return content, False
     return content[:m.end()] + insert + content[m.end():], True
 
+# E: Chinese UI for Spicetify's helper panels ("Experimental features",
+#    "Home config", "Sidebar config"). Spicetify ships them in English only, so
+#    the visible labels are translated in both the CLI templates (so
+#    `spicetify apply` redeploys the Chinese version) and the deployed copies.
+#    Skip with KEEP_ENGLISH=1.
+CHINESE_UI = [
+    ("expFeatures.js", [
+        ("\"Waiting for Spotify to finish loading...\"", "\"正在等待 Spotify 加载完成…\""),
+        ("Using fallback mode. Some features may not work.", "正在使用兼容模式，部分功能可能不可用。"),
+        ("placeholder=\"Search for a feature\"", "placeholder=\"搜索功能项\""),
+        ("\"Experimental features\"", "\"实验性功能\""),
+        (">Clear all cached features and preferences<", ">清空已缓存的功能与偏好设置<"),
+        (">Reset</button>", ">重置</button>"),
+    ]),
+    ("homeConfig.js", [
+        ("up.innerText = \"Up\";", "up.innerText = \"上移\";"),
+        ("down.innerText = \"Down\";", "down.innerText = \"下移\";"),
+        ("\"Unstick\" : \"Stick\"", "\"取消置顶\" : \"置顶\""),
+        ("\"Unlower\" : \"Lower\"", "\"取消置底\" : \"置底\""),
+        ("\"Home config\"", "\"首页排序\""),
+    ]),
+    ("sidebarConfig.js", [
+        ("up.innerText = \"Up\";", "up.innerText = \"上移\";"),
+        ("down.innerText = \"Down\";", "down.innerText = \"下移\";"),
+        ("\"Unstick\" : \"Stick\"", "\"取消置顶\" : \"置顶\""),
+        ("\"Unhide\" : \"Hide\"", "\"取消隐藏\" : \"隐藏\""),
+        ("\"Sidebar config\"", "\"侧边栏配置\""),
+    ]),
+]
+ui_state = {"applied": 0, "translated": 0, "files": 0, "drift": []}
+
+def translate_helpers(helper_dir):
+    if not os.path.isdir(helper_dir):
+        return
+    for fname, edits in CHINESE_UI:
+        path = os.path.join(helper_dir, fname)
+        if not os.path.isfile(path):
+            continue
+        ui_state["files"] += 1
+        with io.open(path, encoding="utf-8") as f:
+            text = f.read()
+        pending = [(o, n) for o, n in edits if o in text]
+        already = [n for o, n in edits if n in text]
+        if not pending:
+            if already:
+                ui_state["translated"] += 1
+            else:
+                ui_state["drift"].append(fname)
+            continue
+        for old, new in pending:
+            text = text.replace(old, new)
+        with io.open(path, "w", encoding="utf-8", newline="") as f:
+            f.write(text)
+        ui_state["applied"] += len(pending)
+
+if not os.environ.get("KEEP_ENGLISH"):
+    template_dir = os.environ.get("JS_HELPER_DIR", "")
+    if not template_dir:
+        candidate = os.path.expanduser("~/.spicetify/jsHelper")
+        if os.path.isdir(candidate):
+            template_dir = candidate
+    if template_dir:
+        translate_helpers(template_dir)
+
 for xpui_dir in target_dirs:
     xpui_js = os.path.join(xpui_dir, "xpui.js")
     wrapper_js = os.path.join(xpui_dir, "helper", "spicetifyWrapper.js")
@@ -308,6 +372,21 @@ for xpui_dir in target_dirs:
             add_result("D: route push headers", "skipped", "no route bundle matched the push header shape")
     else:
         add_result("D: route push headers", "skipped", "no spicetify-routes-*.js bundles found")
+
+    # E: Chinese UI in the deployed helper scripts
+    if not os.environ.get("KEEP_ENGLISH"):
+        translate_helpers(os.path.join(xpui_dir, "helper"))
+
+if os.environ.get("KEEP_ENGLISH"):
+    add_result("E: Chinese UI", "skipped", "disabled with KEEP_ENGLISH=1")
+elif ui_state["applied"]:
+    add_result("E: Chinese UI", "applied", "%d label(s) translated (templates + deployed)" % ui_state["applied"])
+elif ui_state["translated"]:
+    add_result("E: Chinese UI", "not-needed", "helpers are already translated")
+elif ui_state["files"] == 0:
+    add_result("E: Chinese UI", "skipped", "Spicetify helper scripts not found (features disabled?)")
+else:
+    add_result("E: Chinese UI", "failed", "helper shape changed: %s" % ", ".join(ui_state["drift"]))
 
 report_path = os.environ.get("REPORT_PATH", "")
 if report_path:

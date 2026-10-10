@@ -22,6 +22,14 @@ NC='\033[0m'
 FUSION_REPO_URL="https://github.com/Maolaohei/spotx-spicetify-fusion"
 FUSION_REPO_RAW="https://raw.githubusercontent.com/Maolaohei/spotx-spicetify-fusion/main"
 
+# Spicetify refuses to run with root privileges (it can make Spotify show a
+# black window), so fail with instructions here.
+if [ "$(id -u)" -eq 0 ]; then
+    echo -e "${RED}[X] Running as root - Spicetify refuses to run with root privileges.${NC}" >&2
+    echo -e "${YELLOW}    Re-run this script as your normal user (no sudo).${NC}" >&2
+    exit 1
+fi
+
 echo -e "${CYAN} SpotX + Spicetify Fusion - Custom Apps & Extensions Installer${NC}"
 echo -e "${CYAN} Curated: Enhancify, Stats (on-demand patch), lyrics-plus & Extensions${NC}"
 echo -e "${CYAN} Project: ${FUSION_REPO_URL}${NC}"

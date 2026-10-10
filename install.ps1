@@ -28,6 +28,31 @@ $FusionRepoRaw = 'https://raw.githubusercontent.com/Maolaohei/spotx-spicetify-fu
 $script:Checks = New-Object System.Collections.Generic.List[object]
 $script:UpstreamHashes = [ordered]@{}
 $script:VerifyExitCode = 0
+$script:FailedSteps = New-Object System.Collections.Generic.List[string]
+
+# Spicetify refuses to run elevated: files written by an elevated process are
+# owned by the Administrators group, and Spotify (running as the normal user)
+# can end up unable to read them - which shows up as a black/blank window.
+# Nothing in this installer needs elevation (SpotX's Defender exclusions are
+# explicitly skipped), so abort with instructions instead of leaving a broken
+# half-applied install behind.
+function Test-Elevated {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+if ((Test-Elevated) -and -not $VerifyOnly) {
+    Write-Host "[X] This installer is running as Administrator." -ForegroundColor Red
+    Write-Host "    Spicetify refuses to run elevated: the files it writes would be owned by" -ForegroundColor Yellow
+    Write-Host "    Administrators, and Spotify (running as you) can then show a black window." -ForegroundColor Yellow
+    Write-Host "    Close this window, open a NORMAL PowerShell (no 'Run as administrator'), then run:" -ForegroundColor Yellow
+    Write-Host "      iwr -useb $FusionRepoRaw/install.ps1 | iex" -ForegroundColor Yellow
+    # No 'exit': the documented path is "iwr -useb ... | iex" and 'exit' inside
+    # Invoke-Expression closes the caller's console window.
+    $host.SetShouldExit(1)
+    return
+}
 
 function Add-Check {
     param(
@@ -444,15 +469,32 @@ try {
     Invoke-Expression $marketScript
 }
 catch {
-    Write-Warning "Marketplace installer prompt: $_"
+    $script:FailedSteps.Add('Marketplace installer') | Out-Null
+    Write-Warning "Marketplace installer failed: $_"
 }
 
 # --------------------------------------------------------------------------
 # 4. Apply Spicetify Configuration with Marketplace
 # --------------------------------------------------------------------------
 Write-Host "[4/5] Applying Spicetify configuration with Marketplace..." -ForegroundColor Yellow
-spicetify config custom_apps marketplace
-spicetify apply
+
+# The Spicetify CLI refuses to run elevated (see the guard at the top) and can
+# fail for other reasons; every step is checked so the closing summary cannot
+# claim success for a half-applied install.
+function Invoke-SpicetifyStep {
+    param(
+        [string]$Label,
+        [string[]]$Arguments
+    )
+    & spicetify @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        $script:FailedSteps.Add($Label) | Out-Null
+        Write-Warning "spicetify $($Arguments -join ' ') failed with exit code $LASTEXITCODE"
+    }
+}
+
+Invoke-SpicetifyStep -Label 'spicetify config custom_apps marketplace' -Arguments @('config', 'custom_apps', 'marketplace')
+Invoke-SpicetifyStep -Label 'spicetify apply' -Arguments @('apply')
 
 # --------------------------------------------------------------------------
 # 5. Apply the project's compatibility hotfix, fetched from this repository so
@@ -463,14 +505,29 @@ Write-Host "[5/5] Applying SpotX + Spicetify compatibility hotfix..." -Foregroun
 $fixUrl = "$FusionRepoRaw/fix.ps1"
 $fixPath = Join-Path $env:TEMP "spotx-spicetify-fusion-fix.ps1"
 $fixReport = Join-Path $env:TEMP "spotx-spicetify-fusion-fix-report.json"
+if (Test-Path $fixReport) { Remove-Item $fixReport -Force -ErrorAction SilentlyContinue }
 try {
     Invoke-WebRequest -Uri $fixUrl -OutFile $fixPath -UseBasicParsing
     & $fixPath -ReportPath $fixReport
+    if (Test-Path $fixReport) {
+        $fixResult = Get-Content -Path $fixReport -Raw | ConvertFrom-Json
+        if ($fixResult.failed -gt 0) {
+            $script:FailedSteps.Add("hotfix ($($fixResult.failed) patch(es) failed)") | Out-Null
+        }
+    }
 }
 catch {
+    $script:FailedSteps.Add('hotfix') | Out-Null
     Write-Warning "Could not fetch or run the compatibility hotfix: $_"
     Write-Warning "Run it manually after the installation:"
     Write-Warning "  iwr -useb $fixUrl | iex"
+}
+
+# The hotfix can only patch an extracted client: without xpui.js nothing above
+# produced a usable install.
+$xpuiJsPath = Join-Path (Join-Path $SpotifyDir "Apps\xpui") "xpui.js"
+if (-not (Test-Path $xpuiJsPath)) {
+    $script:FailedSteps.Add('Spotify client was never preprocessed (xpui.js missing)') | Out-Null
 }
 
 # 6. Launch Patched Spotify Client
@@ -479,5 +536,18 @@ if (Test-Path $SpotifyExe) {
     Start-Process -FilePath $SpotifyExe
 }
 
-Write-Host " Installation and unified hotfix completed successfully!" -ForegroundColor Green
-Write-Host " Enjoy your ad-free, fully-customized, high-performance Spotify!" -ForegroundColor Green
+if ($script:FailedSteps.Count -eq 0) {
+    Write-Host " Installation and unified hotfix completed successfully!" -ForegroundColor Green
+    Write-Host " Enjoy your ad-free, fully-customized, high-performance Spotify!" -ForegroundColor Green
+}
+else {
+    Write-Host ""
+    Write-Host "[X] Installation finished, but these steps failed:" -ForegroundColor Red
+    foreach ($step in $script:FailedSteps) { Write-Host "      - $step" -ForegroundColor Red }
+    Write-Host "" -ForegroundColor Red
+    Write-Host "    Most common cause: the shell was running as Administrator." -ForegroundColor Yellow
+    Write-Host "    Open a NORMAL PowerShell (no 'Run as administrator'), close Spotify, then re-run:" -ForegroundColor Yellow
+    Write-Host "      iwr -useb $FusionRepoRaw/install.ps1 | iex" -ForegroundColor Yellow
+    $host.SetShouldExit(1)
+    return
+}

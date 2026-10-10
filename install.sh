@@ -32,6 +32,15 @@ done
 FUSION_REPO_URL="https://github.com/Maolaohei/spotx-spicetify-fusion"
 FUSION_REPO_RAW="https://raw.githubusercontent.com/Maolaohei/spotx-spicetify-fusion/main"
 
+# Spicetify refuses to run with root privileges (it can make Spotify show a
+# black window). This script calls sudo where it needs system access, so it must
+# be started as a normal user.
+if [ "$(id -u)" -eq 0 ]; then
+    echo -e "${RED}[X] Do not run this installer as root: Spicetify refuses to run with root privileges.${NC}" >&2
+    echo -e "${YELLOW}    Re-run as your normal user (the script calls sudo where needed).${NC}" >&2
+    exit 1
+fi
+
 CHECKS_PASSED=0
 CHECKS_FAILED=0
 

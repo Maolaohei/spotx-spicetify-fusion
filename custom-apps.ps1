@@ -15,6 +15,18 @@ $ProgressPreference = 'SilentlyContinue'
 $FusionRepoUrl = 'https://github.com/Maolaohei/spotx-spicetify-fusion'
 $FusionRepoRaw = 'https://raw.githubusercontent.com/Maolaohei/spotx-spicetify-fusion/main'
 
+# Spicetify refuses to run elevated (its files would be owned by Administrators
+# and Spotify could show a black window), so fail with instructions instead of
+# letting every spicetify call error out.
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+if ((New-Object Security.Principal.WindowsPrincipal($identity)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Write-Host "[X] This script is running as Administrator - Spicetify refuses to run elevated." -ForegroundColor Red
+    Write-Host "    Close this window, open a NORMAL PowerShell (no 'Run as administrator'), then run:" -ForegroundColor Yellow
+    Write-Host "      iwr -useb $FusionRepoRaw/custom-apps.ps1 | iex" -ForegroundColor Yellow
+    $host.SetShouldExit(1)
+    return
+}
+
 Write-Host " SpotX + Spicetify Fusion - Custom Apps & Extensions Installer" -ForegroundColor Cyan
 Write-Host " Curated: Enhancify, Stats (on-demand patch), lyrics-plus & Popular Extensions" -ForegroundColor Cyan
 Write-Host " Project: $FusionRepoUrl" -ForegroundColor Cyan

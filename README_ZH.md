@@ -56,6 +56,11 @@ iwr -useb https://raw.githubusercontent.com/Maolaohei/spotx-spicetify-fusion/mai
 curl -fsSL https://raw.githubusercontent.com/Maolaohei/spotx-spicetify-fusion/main/install.sh | bash
 ```
 
+> [!IMPORTANT]
+> 请在**普通（非管理员/非 root）终端**里运行。Spicetify 拒绝在提权下运行（它写入的文件
+> 会导致 Spotify 黑屏/白屏），所以安装脚本会检测并直接停下给出提示，而不是留下一个只装了一半的环境。
+> Windows 下请正常打开 PowerShell，不要用“以管理员身份运行”。
+
 ### 3. 可选：一键安装精选自定义应用与拓展 (Custom Apps & Extensions)
 
 若需要额外安装精选的第三方独立应用（如 **Enhancify** 增强面板、**Stats** 听歌统计、**Lyrics Plus** 歌词及各类快捷键拓展），运行独立拓展安装脚本即可：
@@ -104,7 +109,7 @@ bash install.sh --verify-only
 
 ### 离线端到端验证（Windows，不安装）
 
-`tools/verify-offline.ps1` 会用已发布的固定工件把整条流水线重跑一遍：下载固定版本的 Spotify 安装包，仅用 `/extract` 解包到临时沙箱（不写注册表、不产生 `%APPDATA%\Spotify`），用真实 SpotX 给它打补丁，再用 `spicetify -n`（**不会启动客户端**）应用 Spicetify 2.45.3 + Marketplace，最后用 `fix.ps1 -SpotifyDir <沙箱>` 处理，并断言“本来就正确”的 bundle 保持字节不变；同时校验所有脚本横幅、issue 链接与 README 一行命令都指向本仓库，并确认已发布的 raw URL 可访问（共 59 项断言）。结果写入 `verify-out/offline-e2e.json`。
+`tools/verify-offline.ps1` 会用已发布的固定工件把整条流水线重跑一遍：下载固定版本的 Spotify 安装包，仅用 `/extract` 解包到临时沙箱（不写注册表、不产生 `%APPDATA%\Spotify`），用真实 SpotX 给它打补丁，再用 `spicetify -n`（**不会启动客户端**）应用 Spicetify 2.45.3 + Marketplace，最后用 `fix.ps1 -SpotifyDir <沙箱>` 处理，并断言“本来就正确”的 bundle 保持字节不变；同时校验所有脚本横幅、issue 链接与 README 一行命令都指向本仓库，并确认已发布的 raw URL 可访问（共 74 项断言）。结果写入 `verify-out/offline-e2e.json`。
 
 ```powershell
 pwsh tools/verify-offline.ps1
@@ -230,6 +235,8 @@ graph TD
 5. **挂载 Rspack 全局运行时**：修补 `spicetifyWrapper.js`，兼容 `window.rspackChunk`，确保 `Spicetify.React` 与 `Spicetify.ReactDOM` 正常绑定。
 6. **动态接入 Spicetify.URI**：通过解析内部符号表动态导出 URI 解析构造器。
 7. **平替与标准化快照命名**：将 SpotX 恶意修改的大写 `V8_context_snapshot.bin` 恢复标准小写，保障 1.2.x 存量逻辑不受干扰。
+8. **Spicetify 面板汉化**：Spicetify 自带的 **实验性功能**、**首页排序**、**侧边栏配置** 三个面板只有英文。脚本会把菜单入口、`Up`/`Down`/`Stick`/`Lower`/`Hide` 按钮、搜索框、重置行与提示语全部换成中文，并且**同时改写 CLI 模板**（这样每次 `spicetify apply` 出来的仍是中文）与已经部署到客户端的副本。替换文本以 JS 的 `\uXXXX` 转义写入，保证脚本本体仍为纯 ASCII。如需保留英文：`fix.ps1 -KeepEnglish` / `KEEP_ENGLISH=1 bash fix.sh`。
+   注：面板里列出的**功能名与描述**来自 Spotify 自身的远端配置，仍为英文。
 
 ## 📚 逆向工程系列文章与参考
 

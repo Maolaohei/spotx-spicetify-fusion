@@ -126,6 +126,26 @@ function Expand-Zip {
     [System.IO.Compression.ZipFile]::ExtractToDirectory($Zip, $Destination)
 }
 
+function Get-InstallFingerprint {
+    # Identity of the files the installer would overwrite in a real install.
+    # A running Spotify does not rewrite these, so comparing before/after is
+    # stable even when the client is up (unlike a recursive directory walk).
+    $paths = @(
+        (Join-Path $realAppSpotify "Spotify.exe"),
+        (Join-Path $realAppSpotify "Apps\xpui.spa"),
+        (Join-Path $realAppSpotify "Apps\xpui.bak"),
+        (Join-Path $realAppSpotify "Apps\login.spa")
+    )
+    $items = foreach ($p in $paths) {
+        if (Test-Path $p) {
+            $f = Get-Item $p
+            '{0}|{1}|{2}' -f $f.Name, $f.Length, $f.LastWriteTimeUtc.Ticks
+        }
+        else { '<absent>' }
+    }
+    return ($items -join ';')
+}
+
 function Get-SnapshotState {
     # Windows paths are case-insensitive; compare exact names to know the casing.
     param([string]$Dir)
@@ -170,9 +190,10 @@ New-Item -ItemType Directory -Force -Path $work | Out-Null
 Write-Step "Extracting Spotify 1.3.4 (no install)"
 $extracted = Join-Path $work "client"
 New-Item -ItemType Directory -Force -Path $extracted | Out-Null
+$appInstallBefore = Get-InstallFingerprint
 $proc = Start-Process -FilePath $installer -ArgumentList '/extract', "`"$extracted`"" -Wait -PassThru -WindowStyle Hidden
 Assert-That "installer /extract exit code 0" ($proc.ExitCode -eq 0) -Detail "exit $($proc.ExitCode)"
-Assert-That "no %APPDATA%\Spotify created" (-not (Test-Path (Join-Path $env:APPDATA "Spotify"))) -Detail "sandbox-only extraction"
+Assert-That "extraction leaves a real Spotify install untouched" ((Get-InstallFingerprint) -eq $appInstallBefore) -Detail $(if ($realAppExisted) { '%APPDATA%\Spotify files unchanged' } else { 'still absent (%APPDATA%)' })
 
 $xpuiSpa = Join-Path $extracted "Apps\xpui.spa"
 $spaSha = Get-FileHash256 $xpuiSpa
@@ -260,8 +281,8 @@ finally {
     $ErrorActionPreference = $previousEap
 }
 Assert-That "spicetify backup apply exit code 0" ($applyExit -eq 0) -Detail "Spicetify 2.45.3 on Spotify 1.3.4"
-Assert-That "no real Spotify install created (%APPDATA%)" ($realAppExisted -or -not (Test-Path $realAppSpotify)) -Detail $(if ($realAppExisted) { "pre-existing, untouched" } else { "no %APPDATA%\Spotify created" })
-Assert-That "no real Spotify install created (%LOCALAPPDATA%)" ($realLocalExisted -or -not (Test-Path $realLocalSpotify)) -Detail $(if ($realLocalExisted) { "pre-existing, untouched" } else { "no %LOCALAPPDATA%\Spotify created" })
+Assert-That "real install untouched by the whole run (%APPDATA%)" ((Get-InstallFingerprint) -eq $appInstallBefore) -Detail $(if ($realAppExisted) { '%APPDATA%\Spotify files unchanged' } else { 'no %APPDATA%\Spotify created' })
+Assert-That "no real Spotify runtime dir created (%LOCALAPPDATA%)" ($realLocalExisted -or -not (Test-Path $realLocalSpotify)) -Detail $(if ($realLocalExisted) { 'pre-existing, untouched' } else { 'no %LOCALAPPDATA%\Spotify created' })
 if (-not $realAppExisted -and (Test-Path $realAppSpotify)) { Remove-Item $realAppSpotify -Recurse -Force -ErrorAction SilentlyContinue }
 if (-not $realLocalExisted -and (Test-Path $realLocalSpotify)) { Remove-Item $realLocalSpotify -Recurse -Force -ErrorAction SilentlyContinue }
 
@@ -293,7 +314,9 @@ $fixPs1 = Join-Path $RepoRoot "fix.ps1"
 $previousEap = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
 try {
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $fixPs1 -Quiet -SpotifyDir $extracted -ReportPath $fixReport
+    # -JsHelperDir points at the sandbox copy of the CLI so the template
+    # translation is verified without touching the machine's real Spicetify.
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $fixPs1 -Quiet -NoStop -JsHelperDir (Join-Path $spicetifyDir "jsHelper") -SpotifyDir $extracted -ReportPath $fixReport
     $fixExit = $LASTEXITCODE
 }
 finally {
@@ -318,6 +341,35 @@ Assert-That "fix report has no failed patches" ($failedPatches.Count -eq 0) -Det
 $b4 = $report.results | Where-Object { $_.Patch -like 'B4*' } | Select-Object -First 1
 Assert-That "B4 reports Spicetify-managed chunk map" ($b4 -and $b4.status -eq 'not-needed') -Detail $(if ($b4) { "$($b4.status): $($b4.detail)" } else { "missing entry" })
 
+# E: Chinese UI for Spicetify's English-only helper panels. The replacement text
+# is written as JS unicode escapes so the scripts stay pure ASCII; assert the
+# deployed copies and the CLI template were both translated.
+$deployedExp = [System.IO.File]::ReadAllText((Join-Path $appsDir "helper\expFeatures.js"), [System.Text.Encoding]::UTF8)
+$deployedHome = [System.IO.File]::ReadAllText((Join-Path $appsDir "helper\homeConfig.js"), [System.Text.Encoding]::UTF8)
+$templateSidebar = [System.IO.File]::ReadAllText((Join-Path $spicetifyDir "jsHelper\sidebarConfig.js"), [System.Text.Encoding]::UTF8)
+Assert-That "deployed expFeatures.js shows Chinese" ($deployedExp.Contains('\u5b9e\u9a8c\u6027\u529f\u80fd')) -Detail "Experimental features -> \u5b9e\u9a8c\u6027\u529f\u80fd"
+Assert-That "fallback notice translated (emoji anchor avoided)" ($deployedExp.Contains('\u6b63\u5728\u4f7f\u7528\u517c\u5bb9\u6a21\u5f0f') -and -not $deployedExp.Contains('Using fallback mode')) -Detail "notice text replaced"
+Assert-That "deployed homeConfig.js shows Chinese" ($deployedHome.Contains('\u9996\u9875\u6392\u5e8f')) -Detail "Home config -> \u9996\u9875\u6392\u5e8f"
+Assert-That "CLI template sidebarConfig.js translated too" ($templateSidebar.Contains('\u4fa7\u8fb9\u680f\u914d\u7f6e')) -Detail "Sidebar config -> \u4fa7\u8fb9\u680f\u914d\u7f6e"
+$uiPatch = $report.results | Where-Object { $_.Patch -like 'E: Chinese UI*' } | Select-Object -First 1
+Assert-That "E reported as applied" ($uiPatch -and $uiPatch.status -eq 'applied') -Detail $(if ($uiPatch) { $uiPatch.detail } else { 'missing entry' })
+
+# Idempotency: a second run must not rewrite the translated files.
+$deployedExpHash = Get-FileHash256 (Join-Path $appsDir "helper\expFeatures.js")
+$deployedHomeHash = Get-FileHash256 (Join-Path $appsDir "helper\homeConfig.js")
+$secondReport = Join-Path $OutDir "fix-report-second.json"
+$ErrorActionPreference = 'Continue'
+try {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $fixPs1 -Quiet -NoStop -JsHelperDir (Join-Path $spicetifyDir "jsHelper") -SpotifyDir $extracted -ReportPath $secondReport
+}
+finally {
+    $ErrorActionPreference = $previousEap
+}
+$secondRun = Get-Content -Path $secondReport -Raw | ConvertFrom-Json
+$secondUi = $secondRun.results | Where-Object { $_.Patch -like 'E: Chinese UI*' } | Select-Object -First 1
+Assert-That "second run leaves the translations alone" ((Get-FileHash256 (Join-Path $appsDir "helper\expFeatures.js")) -eq $deployedExpHash) -Detail "expFeatures.js unchanged"
+Assert-That "second run reports E as not-needed" ($secondUi -and $secondUi.status -eq 'not-needed') -Detail $(if ($secondUi) { $secondUi.status } else { 'missing entry' })
+Assert-That "no failed patches after the second run" (@($secondRun.results | Where-Object { $_.status -eq 'failed' }).Count -eq 0) -Detail "$($secondRun.results.Count) entries"
 # The legacy URI injection must be absent even if an older fix.ps1 had run.
 Assert-That "no legacy 'Spicetify.URI=s' injection left" (-not ([System.IO.File]::ReadAllText($wrapperJs, [System.Text.Encoding]::UTF8)).Contains('Spicetify.URI=s')) -Detail "wrapper clean"
 
@@ -363,7 +415,12 @@ foreach ($check in $linkChecks) {
 # Scripts may only mention the upstream repo in an attribution comment. This runs
 # through git grep on purpose: some endpoint security products quarantine
 # custom-apps.ps1 as soon as a PowerShell process opens it.
-$grepOutput = & git -C $RepoRoot grep -n -E 'ZGQ-inc/spotx-spicetify-fusion' -- install.ps1 install.sh fix.ps1 fix.sh custom-apps.ps1 custom-apps.sh fix-marketplace-nav.ps1 2>$null
+function Get-GitGrepLines {
+    param([string]$Pattern, [string[]]$Paths)
+    return @(& git -C $RepoRoot grep -n -E $Pattern -- @Paths 2>$null)
+}
+
+$grepOutput = Get-GitGrepLines -Pattern 'ZGQ-inc/spotx-spicetify-fusion' -Paths @('install.ps1', 'install.sh', 'fix.ps1', 'fix.sh', 'custom-apps.ps1', 'custom-apps.sh', 'fix-marketplace-nav.ps1')
 $stale = @()
 foreach ($line in @($grepOutput)) {
     if ($line -match 'Upstream|MIT') { continue }
@@ -402,7 +459,10 @@ Write-Step "Verifying the one-liner install path (iwr | iex)"
 # command, and any '&' inside it becomes the background operator (observed: a
 # stray background job plus "The term 'Extensions' is not recognized"). Keep
 # every published script pure ASCII so no charset can break it.
-foreach ($script in @('install.ps1', 'fix.ps1', 'custom-apps.ps1', 'fix-marketplace-nav.ps1')) {
+# PowerShell 5.1 reads a BOM-less .ps1 with the ANSI code page, so non-ASCII in
+# any of these files can silently break string literals (a GBK-trailing byte even
+# eats the closing quote). Keep every script we run pure ASCII.
+foreach ($script in @('install.ps1', 'fix.ps1', 'custom-apps.ps1', 'fix-marketplace-nav.ps1', 'tools/verify-offline.ps1')) {
     $bytes = [System.IO.File]::ReadAllBytes((Join-Path $RepoRoot $script))
     $nonAscii = @($bytes | Where-Object { $_ -gt 127 })
     Assert-That "$script is pure ASCII (iex-safe)" ($nonAscii.Count -eq 0) -Detail $(if ($nonAscii.Count) { "$($nonAscii.Count) non-ASCII byte(s), first at offset $([array]::IndexOf($bytes, $nonAscii[0]))" } else { 'no BOM, no non-ASCII' })
@@ -494,6 +554,21 @@ else {
     Assert-That "iex failure-path safety" $true -Detail "skipped (pwsh not installed)"
 }
 
+# Elevation guards: Spicetify refuses to run elevated/root (files written by an
+# elevated process can make Spotify show a black window), so the installers must
+# detect it and stop with instructions.
+foreach ($check in @(
+        @{ File = 'install.ps1'; Pattern = 'WindowsBuiltInRole\]::Administrator' },
+        @{ File = 'custom-apps.ps1'; Pattern = 'WindowsBuiltInRole\]::Administrator' },
+        @{ File = 'install.sh'; Pattern = 'id -u' },
+        @{ File = 'custom-apps.sh'; Pattern = 'id -u' },
+        @{ File = 'fix.ps1'; Pattern = 'KeepEnglish' },
+        @{ File = 'fix.sh'; Pattern = 'KEEP_ENGLISH' }
+    )) {
+    $lines = Get-GitGrepLines -Pattern $check.Pattern -Paths @($check.File)
+    Assert-That "$($check.File) handles $($check.Pattern)" ($lines.Count -ge 1) -Detail "$($lines.Count) reference(s)"
+}
+
 # ---------------------------------------------------------------------------
 # 9. Curated custom apps (Enhancify / Stats / lyrics-plus)
 # ---------------------------------------------------------------------------
@@ -501,11 +576,6 @@ Write-Step "Verifying the curated custom apps"
 
 # Content checks go through git grep: a PowerShell process must never open
 # custom-apps.ps1 (some endpoint security suites quarantine it on read).
-function Get-GitGrepLines {
-    param([string]$Pattern, [string[]]$Paths)
-    return @(& git -C $RepoRoot grep -n -E $Pattern -- @Paths 2>$null)
-}
-
 $psDelegates = Get-GitGrepLines -Pattern 'FusionRepoRaw/fix\.ps1' -Paths @('custom-apps.ps1')
 $shDelegates = Get-GitGrepLines -Pattern 'FUSION_REPO_RAW/fix\.sh' -Paths @('custom-apps.sh')
 Assert-That "custom-apps.ps1 delegates to fix.ps1" ($psDelegates.Count -ge 1) -Detail "$($psDelegates.Count) reference(s)"
