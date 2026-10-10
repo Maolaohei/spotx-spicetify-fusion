@@ -1,10 +1,12 @@
 ﻿# SpotX + Spicetify Fusion - Curated Custom Apps & Extensions Installer
-# GitHub: https://github.com/ZGQ-inc/spotx-spicetify-fusion
+# Project: https://github.com/Maolaohei/spotx-spicetify-fusion
+# Upstream: https://github.com/ZGQ-inc/spotx-spicetify-fusion (MIT)
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $ProgressPreference = 'SilentlyContinue'
 
 Write-Host " SpotX + Spicetify Fusion - Custom Apps & Extensions Installer" -ForegroundColor Cyan
 Write-Host " Curated: Enhancify, Stats (patched), lyrics-plus & Popular Extensions" -ForegroundColor Cyan
+Write-Host " Project: https://github.com/Maolaohei/spotx-spicetify-fusion" -ForegroundColor Cyan
 
 $spicetifyBin = "$env:LOCALAPPDATA\spicetify"
 if ((Test-Path $spicetifyBin) -and ($env:PATH -notmatch [regex]::Escape($spicetifyBin))) {

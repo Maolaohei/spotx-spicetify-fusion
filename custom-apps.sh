@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # SpotX + Spicetify Fusion - Curated Custom Apps & Extensions Installer (Linux Edition)
-# GitHub: https://github.com/ZGQ-inc/spotx-spicetify-fusion
+# Project: https://github.com/Maolaohei/spotx-spicetify-fusion
+# Upstream: https://github.com/ZGQ-inc/spotx-spicetify-fusion (MIT)
 
 set -e
 
@@ -12,6 +13,7 @@ NC='\033[0m'
 
 echo -e "${CYAN} SpotX + Spicetify Fusion - Custom Apps & Extensions Installer${NC}"
 echo -e "${CYAN} Curated: Enhancify, Stats (patched), lyrics-plus & Extensions${NC}"
+echo -e "${CYAN} Project: https://github.com/Maolaohei/spotx-spicetify-fusion${NC}"
 
 export PATH="$HOME/.spicetify:$PATH"
 

@@ -27,7 +27,7 @@
     A JSON report can be written with -ReportPath; it records every patch that
     was applied, skipped or not needed for the inspected client.
 .LINK
-    https://github.com/ZGQ-inc/spotx-spicetify-fusion
+    https://github.com/Maolaohei/spotx-spicetify-fusion
 #>
 
 [CmdletBinding()]
@@ -40,6 +40,9 @@ param(
 )
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
+# This fork is the project the scripts and the docs all point to.
+$FusionRepoUrl = 'https://github.com/Maolaohei/spotx-spicetify-fusion'
 
 $script:Results = New-Object System.Collections.Generic.List[object]
 
@@ -100,7 +103,7 @@ function Insert-AfterFirstMatch {
 
 Write-Log " SpotX + Spicetify Unified Compatibility Hotfix (v2.2)" "Cyan"
 Write-Log " Supports Spotify 1.2.x (Webpack) & 1.3.x+ (Rspack, tested 1.3.4)" "Cyan"
-Write-Log " GitHub: https://github.com/ZGQ-inc/spotx-spicetify-fusion" "Cyan"
+Write-Log " GitHub: $FusionRepoUrl" "Cyan"
 
 # Terminate running Spotify processes
 $spotifyProcs = Get-Process -Name "Spotify" -ErrorAction SilentlyContinue
@@ -419,7 +422,7 @@ Write-Log " [OK] All SpotX + Spicetify compatibility patches processed!" "Green"
 if ($failed.Count -gt 0) {
     Write-Log " [!] $($failed.Count) patch(es) could not be verified - the Spotify bundle probably changed." "Yellow"
     Write-Log "     Re-run this script after the next SpotX/Spicetify release, or report it:" "Yellow"
-    Write-Log "     https://github.com/ZGQ-inc/spotx-spicetify-fusion/issues" "Yellow"
+    Write-Log "     $FusionRepoUrl/issues" "Yellow"
 }
 
 if ($ReportPath) {

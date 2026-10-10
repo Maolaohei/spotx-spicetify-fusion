@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # SpotX + Spicetify All-in-One Automated Installer (Linux Edition)
 # Supports Spotify 1.2.x & 1.3.x (Rspack, tested 1.3.4)
-# GitHub: https://github.com/ZGQ-inc/spotx-spicetify-fusion
-# Telegram: https://t.me/ZGQinc
+# Project: https://github.com/Maolaohei/spotx-spicetify-fusion
+# Upstream: https://github.com/ZGQ-inc/spotx-spicetify-fusion (MIT)
+# Telegram (upstream community): https://t.me/ZGQinc
 #
 # Run `bash install.sh --verify-only` to check the upstream bypass rules against
 # the current SpotX-Bash / Spicetify / Marketplace installers without touching
@@ -27,6 +28,10 @@ for arg in "$@"; do
     esac
 done
 
+# This fork is the project the installer, the hotfix and the docs all point to.
+FUSION_REPO_URL="https://github.com/Maolaohei/spotx-spicetify-fusion"
+FUSION_REPO_RAW="https://raw.githubusercontent.com/Maolaohei/spotx-spicetify-fusion/main"
+
 CHECKS_PASSED=0
 CHECKS_FAILED=0
 
@@ -48,7 +53,7 @@ check() {
 
 echo -e "${CYAN} SpotX + Spicetify All-in-One Automated Installer (Linux)       ${NC}"
 echo -e "${CYAN} Supports Spotify 1.2.x & 1.3.x (Rspack Architecture, tested 1.3.4) ${NC}"
-echo -e "${CYAN} GitHub: https://github.com/ZGQ-inc/spotx-spicetify-fusion            ${NC}"
+echo -e "${CYAN} GitHub: ${FUSION_REPO_URL}            ${NC}"
 
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT
@@ -127,7 +132,7 @@ fi
 
 if [ "$CHECKS_FAILED" -gt 0 ]; then
     echo -e "${RED}[-] Upstream bypass checks failed ($CHECKS_FAILED). The dependency scripts changed.${NC}" >&2
-    echo -e "${YELLOW}    Re-run after the next release, or report it: https://github.com/ZGQ-inc/spotx-spicetify-fusion/issues${NC}" >&2
+    echo -e "${YELLOW}    Re-run after the next release, or report it: ${FUSION_REPO_URL}/issues${NC}" >&2
     exit 1
 fi
 
@@ -253,230 +258,18 @@ echo -e "${YELLOW}[6/7] Configuring Spicetify with Marketplace...${NC}"
 spicetify config custom_apps marketplace || true
 spicetify apply || true
 
-# 7. Apply Unified Compatibility Hotfix (Embedded)
-#    Keep this in sync with fix.sh - it is the same patch pipeline, executed
-#    inline so the one-liner installer stays self-contained.
+# 7. Apply the project's compatibility hotfix, fetched from this repository so
+#    the installer and fix.sh can never drift apart
 echo -e "${YELLOW}[7/7] Applying SpotX + Spicetify compatibility hotfix...${NC}"
 
-python3 - << 'EOF'
-import os
-import sys
-import glob
-import re
-import json
-import datetime
-
-themed_dir = os.path.expanduser("~/.config/spicetify/Extracted/Themed/xpui")
-raw_dir = os.path.expanduser("~/.config/spicetify/Extracted/Raw/xpui")
-
-search_paths = ["/opt/spotify", "/usr/share/spotify", "/usr/lib/spotify", os.path.expanduser("~/.local/share/spotify")]
-target_dirs = [d for d in [themed_dir, raw_dir] if os.path.isdir(d)]
-for sp in search_paths:
-    app_xpui = os.path.join(sp, "Apps", "xpui")
-    if os.path.isdir(app_xpui):
-        target_dirs.append(app_xpui)
-
-results = []
-
-def add_result(patch, status, detail=""):
-    results.append({"patch": patch, "status": status, "detail": detail})
-
-def insert_after_once(content, anchor, insert):
-    m = re.search(anchor, content)
-    if not m:
-        return content, False
-    return content[:m.end()] + insert + content[m.end():], True
-
-for xpui_dir in target_dirs:
-    xpui_js = os.path.join(xpui_dir, "xpui.js")
-    wrapper_js = os.path.join(xpui_dir, "helper", "spicetifyWrapper.js")
-    route_files = []
-    custom_apps = []
-
-    if os.path.exists(xpui_js):
-        with open(xpui_js, "r", encoding="utf-8") as f:
-            content = f.read()
-
-        patched = False
-
-        # B1: legacy Spicetify semver bug injecting broken snackbar statement
-        bad_snackbar = "Spicetify.Snackbar.enqueueImageSnackbar="
-        if bad_snackbar in content:
-            content = content.replace(bad_snackbar, "")
-            patched = True
-            add_result("B1: Snackbar SyntaxError", "applied", "removed legacy enqueueImageSnackbar injection")
-        else:
-            add_result("B1: Snackbar SyntaxError", "not-needed", "not present (Spicetify >= 2.45 bundles are clean)")
-
-        # B2: legacy useNavigateStable safe fallback
-        nav = re.search(r"return\(0,([A-Za-z_$][\w$]*)\.useNavigateStable\)\(\)", content)
-        if nav:
-            module = nav.group(1)
-            safe_nav = ("return(()=>{try{return(0," + module + ".useNavigateStable)()}catch(err){"
-                        "return Spicetify?.Platform?.History?.push||Spicetify?.Platform?.History?.navigate||(()=>({}))}})()")
-            content = content[:nav.start()] + safe_nav + content[nav.end():]
-            patched = True
-            add_result("B2: useNavigateStable fallback", "applied", "wrapped (0,%s.useNavigateStable)()" % module)
-        else:
-            add_result("B2: useNavigateStable fallback", "not-needed", "anchor absent (fixed on this build)")
-
-        # B3: legacy RegistryContext safe guard (Spotify 1.3.0 only)
-        old_reg = "(0,i.useContext)(e.yv)"
-        safe_reg = "((0,i.useContext)(e.yv)||Spicetify?.Platform?.Registry||{entries:new Map()})"
-        if old_reg in content and safe_reg not in content:
-            content = content.replace(old_reg, safe_reg)
-            patched = True
-            add_result("B3: RegistryContext guard", "applied", "legacy 1.3.0 anchor found")
-        else:
-            add_result("B3: RegistryContext guard", "not-needed", "anchor absent (fixed on this build)")
-
-        # B4: Custom Apps chunk registration (.u map, miniCssF map, CSS allowlist)
-        route_files = sorted(glob.glob(os.path.join(xpui_dir, "spicetify-routes-*.js")))
-        custom_apps = []
-        for rf in route_files:
-            bname = os.path.basename(rf)
-            if bname.startswith("spicetify-routes-") and bname.endswith(".js"):
-                custom_apps.append(bname[len("spicetify-routes-"):-3])
-
-        if not custom_apps:
-            add_result("B4: Custom Apps chunk map", "skipped", "no spicetify-routes-*.js bundles found")
-        else:
-            u_anchor = r'\.u=\w+=>""\+\(\(\{'
-            css_anchor = r'\.miniCssF=\w+=>""\+\(\(\{'
-            allow_anchor = r'0!==\w+\[e\]&&\(\{'
-            app_id = 1001
-            mapped_by_spicetify = 0
-            injected = 0
-
-            for app in custom_apps:
-                bundle = "spicetify-routes-" + app
-                name_key = '"%s"' % bundle
-                already_mapped = (":" + name_key) in content
-                if not already_mapped:
-                    entry = '%d:%s,' % (app_id, name_key)
-                    content, ok = insert_after_once(content, u_anchor, entry)
-                    if ok:
-                        patched = True
-                        injected += 1
-                    if re.search(css_anchor, content):
-                        content, _ = insert_after_once(content, css_anchor, entry)
-                else:
-                    mapped_by_spicetify += 1
-
-                css_allowed = (name_key + ":1") in content or ("%d:1" % app_id) in content
-                if not css_allowed:
-                    content, ok = insert_after_once(content, allow_anchor, "%d:1," % app_id)
-                    if ok:
-                        patched = True
-                        injected += 1
-                app_id += 1
-
-            if injected:
-                add_result("B4: Custom Apps chunk map", "applied",
-                           "injected %d map entry/entries for %d app(s)" % (injected, len(custom_apps)))
-            elif mapped_by_spicetify == len(custom_apps):
-                add_result("B4: Custom Apps chunk map", "not-needed",
-                           "Spicetify registered all %d app(s) natively" % len(custom_apps))
-            elif not re.search(u_anchor, content):
-                add_result("B4: Custom Apps chunk map", "failed",
-                           "no Rspack .u loader found; Spotify bundle shape changed")
-            else:
-                add_result("B4: Custom Apps chunk map", "applied", "chunk map already present")
-
-        if patched:
-            with open(xpui_js, "w", encoding="utf-8") as f:
-                f.write(content)
-            print("  [SUCCESS] Patched %s" % xpui_js)
-        else:
-            print("  [INFO] %s needs no patches on this build." % xpui_js)
-
-    # C: helper/spicetifyWrapper.js
-    if os.path.exists(wrapper_js):
-        with open(wrapper_js, "r", encoding="utf-8") as f:
-            wcontent = f.read()
-        wpatched = False
-
-        if re.search(r"rspackChunk(?!client_web)", wcontent):
-            add_result("C1: rspackChunk hook", "not-needed", "wrapper already negotiates window.rspackChunk")
-        else:
-            target_chunk = "window?.webpackChunkclient_web||window?.rspackChunkclient_web"
-            fixed_chunk = target_chunk + "||window?.rspackChunk"
-            if target_chunk in wcontent:
-                wcontent = wcontent.replace(target_chunk, fixed_chunk)
-                wpatched = True
-                add_result("C1: rspackChunk hook", "applied", "legacy wrapper patched")
-            else:
-                add_result("C1: rspackChunk hook", "failed", "wrapper shape unknown; neither native nor legacy anchor found")
-
-        legacy_pattern = r'\(\(\)=>\{let u=f\.find\(m=>m\?\.NQG\?\.PLAYLIST_V2\);.*?Spicetify\.URI=s\}\}\)\(\)\,?'
-        has_modern_uri = "URI.fromString" in wcontent or "waitForURI" in wcontent
-        if has_modern_uri:
-            if "Spicetify.URI=s" in wcontent:
-                cleaned = re.sub(legacy_pattern, "", wcontent)
-                if cleaned != wcontent:
-                    wcontent = cleaned
-                    wpatched = True
-                    add_result("C2: Spicetify.URI export", "applied",
-                               "removed obsolete legacy URI injection left by older fix.sh runs")
-                else:
-                    add_result("C2: Spicetify.URI export", "skipped", "legacy marker present but could not be removed cleanly")
-            else:
-                add_result("C2: Spicetify.URI export", "not-needed", "wrapper resolves URI natively")
-        else:
-            uri_target = "Spicetify.React=f.find(m=>m?.useMemo),"
-            uri_inject = ('(()=>{let u=f.find(m=>m?.NQG?.PLAYLIST_V2);if(u){let s=u.o_h("spotify:track:4uLU6hMCjMI75M1A2tKUQC")?.constructor;'
-                          'if(s){s.Type=u.NQG,s.from=u.o_h,s.fromString=u.Lce,s.idToHex=u.DY5,s.hexToId=u.dx2,Spicetify.URI=s}}})(),')
-            if uri_target in wcontent and "Spicetify.URI=s" not in wcontent:
-                wcontent = wcontent.replace(uri_target, uri_target + uri_inject)
-                wpatched = True
-                add_result("C2: Spicetify.URI export", "applied", "legacy wrapper patched")
-            else:
-                add_result("C2: Spicetify.URI export", "failed", "wrapper shape unknown; legacy anchor not found")
-
-        if wpatched:
-            with open(wrapper_js, "w", encoding="utf-8") as f:
-                f.write(wcontent)
-            print("  [SUCCESS] Patched %s" % wrapper_js)
-        else:
-            print("  [INFO] %s needs no patches on this build." % wrapper_js)
-    else:
-        add_result("C1/C2: spicetifyWrapper.js", "skipped",
-                   "helper/spicetifyWrapper.js not found (set expose_apis=1 and run 'spicetify apply')")
-
-    # D: push headers in spicetify-routes-*.js
-    if custom_apps:
-        header_fixed = 0
-        header_native = 0
-        for rf in route_files:
-            with open(rf, "r", encoding="utf-8") as f:
-                rc = f.read()
-            push_idx = rc.find(").push([[")
-            if not (0 < push_idx < 300):
-                continue
-            head = rc[:push_idx]
-            if re.search(r"rspackChunk(?!client_web)", head):
-                header_native += 1
-                continue
-            if "webpackChunkclient_web" in head:
-                fixed_head = '(("u">typeof self?self:global).rspackChunk||=[]' + rc[push_idx:]
-                with open(rf, "w", encoding="utf-8") as f:
-                    f.write(fixed_head)
-                header_fixed += 1
-        if header_fixed:
-            add_result("D: route push headers", "applied", "fixed %d bundle(s)" % header_fixed)
-        elif header_native:
-            add_result("D: route push headers", "not-needed", "%d bundle(s) already negotiate rspackChunk" % header_native)
-        else:
-            add_result("D: route push headers", "skipped", "no route bundle matched the push header shape")
-    else:
-        add_result("D: route push headers", "skipped", "no spicetify-routes-*.js bundles found")
-
-failed = [r for r in results if r["status"] == "failed"]
-if failed:
-    print("  [!] %d patch(es) could not be verified - the Spotify bundle probably changed." % len(failed))
-    print("      Re-run this script after the next SpotX/Spicetify release, or report it:")
-    print("      https://github.com/ZGQ-inc/spotx-spicetify-fusion/issues")
-EOF
+FIX_SH="$WORKDIR/fix.sh"
+if fetch "$FUSION_REPO_RAW/fix.sh" "$FIX_SH"; then
+    bash "$FIX_SH" || true
+else
+    echo -e "${YELLOW}[!] Could not fetch the hotfix from ${FUSION_REPO_RAW}/fix.sh${NC}" >&2
+    echo -e "${YELLOW}    Run it manually after the installation:${NC}" >&2
+    echo -e "${YELLOW}    curl -fsSL ${FUSION_REPO_RAW}/fix.sh | bash${NC}" >&2
+fi
 
 # Launch Spotify on Linux if available
 if command -v spotify >/dev/null 2>&1; then

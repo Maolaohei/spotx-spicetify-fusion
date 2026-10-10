@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # SpotX + Spicetify Unified Compatibility Hotfix Script (Linux Edition)
 # Supports Spotify 1.2.x (Webpack) & 1.3.x+ (Rspack, tested 1.3.4)
-# GitHub: https://github.com/ZGQ-inc/spotx-spicetify-fusion
+# Project: https://github.com/Maolaohei/spotx-spicetify-fusion
+# Upstream: https://github.com/ZGQ-inc/spotx-spicetify-fusion (MIT)
 #
 # Environment:
 #   SPOTIFY_DIR=/path/to/spotify   override client autodetection (testing/portable)
@@ -16,9 +17,12 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m'
 
+# This fork is the project the scripts and the docs all point to.
+FUSION_REPO_URL="https://github.com/Maolaohei/spotx-spicetify-fusion"
+
 echo -e "${CYAN} SpotX + Spicetify Unified Compatibility Hotfix (Linux v2.2)   ${NC}"
 echo -e "${CYAN} Supports Spotify 1.2.x (Webpack) & 1.3.x+ (Rspack, tested 1.3.4) ${NC}"
-echo -e "${CYAN} GitHub: https://github.com/ZGQ-inc/spotx-spicetify-fusion            ${NC}"
+echo -e "${CYAN} GitHub: ${FUSION_REPO_URL}            ${NC}"
 
 # Terminate running Spotify processes
 if pgrep -x "spotify" > /dev/null; then
@@ -91,7 +95,7 @@ fi
 
 # Python 3 helper to execute precise AST/string patching
 apply_patch_python() {
-    SPOTIFY_DIR="$SPOTIFY_DIR" REPORT_PATH="${REPORT_PATH:-}" python3 - << 'EOF'
+    FUSION_REPO_URL="$FUSION_REPO_URL" SPOTIFY_DIR="$SPOTIFY_DIR" REPORT_PATH="${REPORT_PATH:-}" python3 - << 'EOF'
 import os
 import sys
 import glob
@@ -327,7 +331,7 @@ failed = [r for r in results if r["status"] == "failed"]
 if failed:
     print("  [!] %d patch(es) could not be verified - the Spotify bundle probably changed." % len(failed))
     print("      Re-run this script after the next SpotX/Spicetify release, or report it:")
-    print("      https://github.com/ZGQ-inc/spotx-spicetify-fusion/issues")
+    print("      %s/issues" % os.environ.get("FUSION_REPO_URL", "https://github.com/Maolaohei/spotx-spicetify-fusion"))
 EOF
 }
 

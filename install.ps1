@@ -1,7 +1,8 @@
 # SpotX + Spicetify All-in-One Automated Installer (Windows Edition)
 # Supports Spotify 1.2.x & 1.3.x (Rspack, tested 1.3.4)
-# GitHub: https://github.com/ZGQ-inc/spotx-spicetify-fusion
-# Telegram: https://t.me/ZGQinc
+# Project: https://github.com/Maolaohei/spotx-spicetify-fusion
+# Upstream: https://github.com/ZGQ-inc/spotx-spicetify-fusion (MIT)
+# Telegram (upstream community): https://t.me/ZGQinc
 #
 # This installer wraps the upstream SpotX and Spicetify installers and removes
 # their interactive prompts so the whole flow can run unattended. Upstream
@@ -19,6 +20,10 @@ param(
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $ProgressPreference = 'SilentlyContinue'
+
+# This fork is the project the installer, the hotfix and the docs all point to.
+$FusionRepoUrl = 'https://github.com/Maolaohei/spotx-spicetify-fusion'
+$FusionRepoRaw = 'https://raw.githubusercontent.com/Maolaohei/spotx-spicetify-fusion/main'
 
 $script:Checks = New-Object System.Collections.Generic.List[object]
 $script:UpstreamHashes = [ordered]@{}
@@ -138,8 +143,8 @@ if ($VerifyOnly) {
 }
 
 Write-Host " SpotX + Spicetify All-in-One Automated Installer" -ForegroundColor Cyan
+Write-Host " GitHub: $FusionRepoUrl" -ForegroundColor Cyan
 Write-Host " Supports Spotify 1.2.x & 1.3.x (Rspack)" -ForegroundColor Cyan
-Write-Host " GitHub: https://github.com/ZGQ-inc/spotx-spicetify-fusion" -ForegroundColor Cyan
 
 # --------------------------------------------------------------------------
 # 1. Install / Update Spotify with SpotX
@@ -432,166 +437,22 @@ spicetify config custom_apps marketplace
 spicetify apply
 
 # --------------------------------------------------------------------------
-# 5. Apply SpotX + Spicetify Unified Compatibility Hotfix (Embedded)
+# 5. Apply the project's compatibility hotfix, fetched from this repository so
+#    the installer and fix.ps1 can never drift apart
 # --------------------------------------------------------------------------
 Write-Host "[5/5] Applying SpotX + Spicetify compatibility hotfix..." -ForegroundColor Yellow
 
-$SpotifyDir = Join-Path $env:APPDATA "Spotify"
-if (-not (Test-Path $SpotifyDir)) {
-    $SpotifyDir = Join-Path $env:LOCALAPPDATA "Spotify"
+$fixUrl = "$FusionRepoRaw/fix.ps1"
+$fixPath = Join-Path $env:TEMP "spotx-spicetify-fusion-fix.ps1"
+$fixReport = Join-Path $env:TEMP "spotx-spicetify-fusion-fix-report.json"
+try {
+    Invoke-WebRequest -Uri $fixUrl -OutFile $fixPath -UseBasicParsing
+    & $fixPath -ReportPath $fixReport
 }
-$SpotifyExe = Join-Path $SpotifyDir "Spotify.exe"
-$SpotifyAppsDir = Join-Path $SpotifyDir "Apps\xpui"
-$xpuiJs = Join-Path $SpotifyAppsDir "xpui.js"
-$wrapperJs = Join-Path $SpotifyAppsDir "helper\spicetifyWrapper.js"
-$routeFiles = @()
-
-# Snapshot filename casing normalization (SpotX commit 9fa954a fix).
-# Windows paths are case-insensitive, so enumerate and match case-sensitively.
-$snapshotFiles = @(Get-ChildItem -LiteralPath $SpotifyDir -File -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -cmatch '^V8_context_snapshot.*\.bin$' })
-foreach ($snapshotFile in $snapshotFiles) {
-    $lowerName = "v" + $snapshotFile.Name.Substring(1)
-    $tempName = "$lowerName.tmp"
-    try {
-        Rename-Item -LiteralPath $snapshotFile.FullName -NewName $tempName -Force -ErrorAction Stop
-        Rename-Item -LiteralPath (Join-Path $SpotifyDir $tempName) -NewName $lowerName -Force -ErrorAction Stop
-        Write-Host "  [+] Normalized snapshot filename casing to '$lowerName'" -ForegroundColor Green
-    }
-    catch {}
-}
-
-if (Test-Path $xpuiJs) {
-    $xpuiContent = [System.IO.File]::ReadAllText($xpuiJs, [System.Text.Encoding]::UTF8)
-    $xpuiPatched = $false
-
-    # 1. Legacy Spicetify semver bug (SyntaxError startup black screen)
-    $badSnackbar = "Spicetify.Snackbar.enqueueImageSnackbar="
-    if ($xpuiContent.Contains($badSnackbar)) {
-        $xpuiContent = $xpuiContent.Replace($badSnackbar, "")
-        $xpuiPatched = $true
-        Write-Host "  [+] Fixed SyntaxError corruption (Resolved legacy startup black screen)" -ForegroundColor Green
-    }
-
-    # 2. Legacy useNavigateStable crash (Marketplace white screen)
-    $navMatch = [regex]::Match($xpuiContent, 'return\(0,([A-Za-z_$][\w$]*)\.useNavigateStable\)\(\)')
-    if ($navMatch.Success) {
-        $navModule = $navMatch.Groups[1].Value
-        $safeNav = 'return(()=>{try{return(0,' + $navModule + '.useNavigateStable)()}catch(err){return Spicetify?.Platform?.History?.push||Spicetify?.Platform?.History?.navigate||(()=>({}))}})()'
-        $xpuiContent = $xpuiContent.Remove($navMatch.Index, $navMatch.Length).Insert($navMatch.Index, $safeNav)
-        $xpuiPatched = $true
-        Write-Host "  [+] Injected safe fallback for useNavigateStable" -ForegroundColor Green
-    }
-
-    # 3. Scan custom apps and inject chunk map + MiniCss allowlist only when
-    #    Spicetify did not already register them (>= 2.45 does it natively).
-    $customAppBundles = @()
-    $routeFiles = @(Get-ChildItem -Path $SpotifyAppsDir -Filter "spicetify-routes-*.js" -ErrorAction SilentlyContinue)
-    foreach ($rf in $routeFiles) {
-        if ($rf.Name -match "^spicetify-routes-(.+)\.js$") {
-            $customAppBundles += $Matches[1]
-        }
-    }
-    if ($customAppBundles.Count -gt 0) {
-        $uAnchor = '\.u=\w+=>""\+\(\(\{'
-        $cssAnchor = '\.miniCssF=\w+=>""\+\(\(\{'
-        $allowAnchor = '0!==\w+\[e\]&&\(\{'
-        $appId = 1001
-        foreach ($app in $customAppBundles) {
-            $bundleName = "spicetify-routes-$app"
-            $nameKey = '"' + $bundleName + '"'
-            if (-not $xpuiContent.Contains(":" + $nameKey)) {
-                $entry = "$appId`:$nameKey,"
-                $m = [regex]::Match($xpuiContent, $uAnchor)
-                if ($m.Success) {
-                    $pos = $m.Index + $m.Length
-                    $xpuiContent = $xpuiContent.Insert($pos, $entry)
-                    $xpuiPatched = $true
-                    Write-Host "  [+] Injected '$bundleName' into the Rspack .u loader" -ForegroundColor Green
-                }
-                $m = [regex]::Match($xpuiContent, $cssAnchor)
-                if ($m.Success) {
-                    $pos = $m.Index + $m.Length
-                    $xpuiContent = $xpuiContent.Insert($pos, $entry)
-                    $xpuiPatched = $true
-                }
-            }
-            if (-not ($xpuiContent.Contains($nameKey + ":1") -or $xpuiContent.Contains("$appId`:1"))) {
-                $m = [regex]::Match($xpuiContent, $allowAnchor)
-                if ($m.Success) {
-                    $pos = $m.Index + $m.Length
-                    $xpuiContent = $xpuiContent.Insert($pos, "$appId`:1,")
-                    $xpuiPatched = $true
-                    Write-Host "  [+] Injected '$bundleName' into the MiniCss allowlist" -ForegroundColor Green
-                }
-            }
-            $appId++
-        }
-    }
-
-    if ($xpuiPatched) {
-        [System.IO.File]::WriteAllText($xpuiJs, $xpuiContent, (New-Object System.Text.UTF8Encoding($false)))
-        Write-Host "  [+] xpui.js successfully patched!" -ForegroundColor Green
-    }
-    else {
-        Write-Host "  [=] xpui.js needs no patches on this build (Spicetify handles it natively)." -ForegroundColor DarkGray
-    }
-}
-
-# 5b. Patch helper/spicetifyWrapper.js (legacy Spicetify only)
-if (Test-Path $wrapperJs) {
-    $wrapContent = [System.IO.File]::ReadAllText($wrapperJs, [System.Text.Encoding]::UTF8)
-    $wrapPatched = $false
-
-    if (-not ($wrapContent -match 'rspackChunk(?!client_web)')) {
-        $chunkTarget = 'window?.webpackChunkclient_web||window?.rspackChunkclient_web'
-        $chunkFixed = 'window?.webpackChunkclient_web||window?.rspackChunkclient_web||window?.rspackChunk'
-        if ($wrapContent.Contains($chunkTarget)) {
-            $wrapContent = $wrapContent.Replace($chunkTarget, $chunkFixed)
-            $wrapPatched = $true
-            Write-Host "  [+] Hooked window.rspackChunk in spicetifyWrapper.js" -ForegroundColor Green
-        }
-    }
-
-    $hasModernUri = $wrapContent -match 'URI\.fromString' -or $wrapContent -match 'waitForURI'
-    if ($hasModernUri) {
-        if ($wrapContent.Contains('Spicetify.URI=s')) {
-            $wrapContent = [regex]::Replace($wrapContent, '\(\(\)=>\{let u=f\.find\(m=>m\?\.NQG\?\.PLAYLIST_V2\);.*?Spicetify\.URI=s\}\}\)\(\)\,?', '')
-            $wrapPatched = $true
-            Write-Host "  [+] Removed obsolete legacy URI injection from spicetifyWrapper.js" -ForegroundColor Green
-        }
-    }
-    else {
-        $uriTarget = 'Spicetify.React=f.find(m=>m?.useMemo),'
-        $uriInjection = '(()=>{let u=f.find(m=>m?.NQG?.PLAYLIST_V2);if(u){let s=u.o_h("spotify:track:4uLU6hMCjMI75M1A2tKUQC")?.constructor;if(s){s.Type=u.NQG,s.from=u.o_h,s.fromString=u.Lce,s.idToHex=u.DY5,s.hexToId=u.dx2,Spicetify.URI=s}}})(),'
-        if ($wrapContent.Contains($uriTarget) -and -not $wrapContent.Contains('Spicetify.URI=s')) {
-            $wrapContent = $wrapContent.Replace($uriTarget, $uriTarget + $uriInjection)
-            $wrapPatched = $true
-            Write-Host "  [+] Injected legacy Spicetify.URI parser export" -ForegroundColor Green
-        }
-    }
-
-    if ($wrapPatched) {
-        [System.IO.File]::WriteAllText($wrapperJs, $wrapContent, (New-Object System.Text.UTF8Encoding($false)))
-        Write-Host "  [+] spicetifyWrapper.js successfully patched!" -ForegroundColor Green
-    }
-    else {
-        Write-Host "  [=] spicetifyWrapper.js needs no patches on this build." -ForegroundColor DarkGray
-    }
-}
-
-# 5c. Fix custom apps push headers in spicetify-routes-*.js (legacy bundles only)
-foreach ($rf in $routeFiles) {
-    $rc = [System.IO.File]::ReadAllText($rf.FullName, [System.Text.Encoding]::UTF8)
-    $pushIdx = $rc.IndexOf(').push([[')
-    if ($pushIdx -gt 0 -and $pushIdx -lt 300) {
-        $head = $rc.Substring(0, $pushIdx)
-        if (($head -notmatch 'rspackChunk(?!client_web)') -and ($head -match 'webpackChunkclient_web')) {
-            $fixedHead = '(("u">typeof self?self:global).rspackChunk||=[]' + $rc.Substring($pushIdx)
-            [System.IO.File]::WriteAllText($rf.FullName, $fixedHead, (New-Object System.Text.UTF8Encoding($false)))
-            Write-Host "  [+] Fixed bundle push chain for $($rf.Name)" -ForegroundColor Green
-        }
-    }
+catch {
+    Write-Warning "Could not fetch or run the compatibility hotfix: $_"
+    Write-Warning "Run it manually after the installation:"
+    Write-Warning "  iwr -useb $fixUrl | iex"
 }
 
 # 6. Launch Patched Spotify Client
