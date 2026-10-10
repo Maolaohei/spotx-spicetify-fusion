@@ -316,7 +316,7 @@ $ErrorActionPreference = 'Continue'
 try {
     # -JsHelperDir points at the sandbox copy of the CLI so the template
     # translation is verified without touching the machine's real Spicetify.
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $fixPs1 -Quiet -NoStop -JsHelperDir (Join-Path $spicetifyDir "jsHelper") -SpotifyDir $extracted -ReportPath $fixReport
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $fixPs1 -Quiet -NoStop -JsHelperDir (Join-Path $spicetifyDir "jsHelper") -I18nDir (Join-Path $RepoRoot "i18n") -SpotifyDir $extracted -ReportPath $fixReport
     $fixExit = $LASTEXITCODE
 }
 finally {
@@ -349,6 +349,22 @@ $deployedHome = [System.IO.File]::ReadAllText((Join-Path $appsDir "helper\homeCo
 $templateSidebar = [System.IO.File]::ReadAllText((Join-Path $spicetifyDir "jsHelper\sidebarConfig.js"), [System.Text.Encoding]::UTF8)
 Assert-That "deployed expFeatures.js shows Chinese" ($deployedExp.Contains('\u5b9e\u9a8c\u6027\u529f\u80fd')) -Detail "Experimental features -> \u5b9e\u9a8c\u6027\u529f\u80fd"
 Assert-That "fallback notice translated (emoji anchor avoided)" ($deployedExp.Contains('\u6b63\u5728\u4f7f\u7528\u517c\u5bb9\u6a21\u5f0f') -and -not $deployedExp.Contains('Using fallback mode')) -Detail "notice text replaced"
+
+# E2: the rows inside the panel list Spotify's own feature flags with English
+# descriptions. The project dictionary (keyed by feature name) is injected as a
+# lookup so rows render Chinese; flags we do not know yet keep their English
+# text, which is why the anchor and the row-label replacement matter.
+$featureDictionary = Join-Path $RepoRoot "i18n\exp-features.zh.json"
+Assert-That "feature dictionary shipped" (Test-Path $featureDictionary) -Detail $(if (Test-Path $featureDictionary) { "$((Get-Content -Path $featureDictionary -Raw -Encoding UTF8 | ConvertFrom-Json).labels.PSObject.Properties.Count) entries" } else { 'missing' })
+Assert-That "feature labels injected into the deployed helper" ($deployedExp.Contains('zhLabel(') -and $deployedExp.Contains('${zhLabel(name, desc)}')) -Detail "lookup + row label"
+$mapStart = $deployedExp.IndexOf('zhLabels={')
+$mapEnd = $deployedExp.IndexOf('};const zhLabel')
+$mapText = if ($mapStart -ge 0 -and $mapEnd -gt $mapStart) { $deployedExp.Substring($mapStart, $mapEnd - $mapStart) } else { '' }
+$mapCount = ([regex]::Matches($mapText, '":"')).Count
+Assert-That "injected dictionary carries the full label set" ($mapCount -ge 360) -Detail "$mapCount entries"
+Assert-That "known flag renders Chinese" ($mapText.Contains('"enableSuperConnect":"\u542f\u7528\u8d85\u7ea7\u8fde\u63a5')) -Detail "enableSuperConnect -> \u542f\u7528\u8d85\u7ea7\u8fde\u63a5"
+$templateExp = [System.IO.File]::ReadAllText((Join-Path $spicetifyDir "jsHelper\expFeatures.js"), [System.Text.Encoding]::UTF8)
+Assert-That "CLI template got the feature labels too" ($templateExp.Contains('zhLabel(')) -Detail "template patched"
 Assert-That "deployed homeConfig.js shows Chinese" ($deployedHome.Contains('\u9996\u9875\u6392\u5e8f')) -Detail "Home config -> \u9996\u9875\u6392\u5e8f"
 Assert-That "CLI template sidebarConfig.js translated too" ($templateSidebar.Contains('\u4fa7\u8fb9\u680f\u914d\u7f6e')) -Detail "Sidebar config -> \u4fa7\u8fb9\u680f\u914d\u7f6e"
 $uiPatch = $report.results | Where-Object { $_.Patch -like 'E: Chinese UI*' } | Select-Object -First 1
@@ -360,7 +376,7 @@ $deployedHomeHash = Get-FileHash256 (Join-Path $appsDir "helper\homeConfig.js")
 $secondReport = Join-Path $OutDir "fix-report-second.json"
 $ErrorActionPreference = 'Continue'
 try {
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $fixPs1 -Quiet -NoStop -JsHelperDir (Join-Path $spicetifyDir "jsHelper") -SpotifyDir $extracted -ReportPath $secondReport
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $fixPs1 -Quiet -NoStop -JsHelperDir (Join-Path $spicetifyDir "jsHelper") -I18nDir (Join-Path $RepoRoot "i18n") -SpotifyDir $extracted -ReportPath $secondReport
 }
 finally {
     $ErrorActionPreference = $previousEap
@@ -589,6 +605,35 @@ Assert-That "Stats layout patch is probe-based" ($statsProbe.Count -ge 2) -Detai
 
 $enhZipFilter = @((Get-GitGrepLines -Pattern '\.zip' -Paths @('custom-apps.ps1', 'custom-apps.sh')).Count)
 Assert-That "Enhancify asset selection filters .zip" ($enhZipFilter[0] -ge 2) -Detail "$($enhZipFilter[0]) zip reference(s)"
+
+# Spicetify >= 2.45 appends ONE value per call for list keys (custom_apps,
+# extensions). The pre-2.45 multi-value call is not just ignored: the extra
+# arguments are read as config field names, so only the first value lands.
+# The scripts must use the per-item form; verify it against the real CLI.
+$oldStyleListCalls = Get-GitGrepLines -Pattern "'custom_apps', 'Enhancify'|'extensions', 'bookmark\.js'|config custom_apps Enhancify|config extensions bookmark" -Paths @('custom-apps.ps1', 'custom-apps.sh')
+Assert-That "custom-apps.* avoid the pre-2.45 multi-value config call" ($oldStyleListCalls.Count -eq 0) -Detail $(if ($oldStyleListCalls.Count) { $oldStyleListCalls -join '; ' } else { 'per-item calls only' })
+
+$uiConfig = Join-Path $work "ui-config"
+New-Item -ItemType Directory -Force -Path $uiConfig | Out-Null
+$previousConfig = $env:SPICETIFY_CONFIG
+$previousEap = $ErrorActionPreference
+$env:SPICETIFY_CONFIG = $uiConfig
+$ErrorActionPreference = 'Continue'
+try {
+    foreach ($app in @('Enhancify', 'stats', 'lyrics-plus')) {
+        & $spicetifyExe config custom_apps $app | Out-Null
+    }
+    $listed = (& $spicetifyExe config custom_apps 2>&1 |
+            ForEach-Object { ($_ -replace "\x1b\[[0-9;]*m", '').Trim() } |
+            Where-Object { $_ }) -join '|'
+}
+finally {
+    $env:SPICETIFY_CONFIG = $previousConfig
+    $ErrorActionPreference = $previousEap
+}
+$listed = $listed.Trim()
+$missing = @('Enhancify', 'stats', 'lyrics-plus') | Where-Object { $listed -notmatch [regex]::Escape($_) }
+Assert-That "per-item config calls append every value (real CLI)" ($missing.Count -eq 0) -Detail "custom_apps = $listed"
 
 # Real upstream artifacts: the pinned releases the scripts resolve.
 Add-Type -AssemblyName System.IO.Compression.FileSystem

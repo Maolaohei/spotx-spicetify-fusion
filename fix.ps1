@@ -39,6 +39,7 @@ param(
     [switch]$KeepEnglish,
     [string]$SpotifyDir,
     [string]$JsHelperDir,
+    [string]$I18nDir,
     [string]$ReportPath
 )
 
@@ -501,6 +502,69 @@ else {
             $uiApplied += $pending.Count
         }
     }
+
+    # Inner feature labels: the panel lists Spotify's own feature flags with
+    # their English descriptions ("Enable the Super Connect feature"). The
+    # project ships a name -> Chinese dictionary; inject a lookup into
+    # expFeatures.js so the rows render Chinese and any flag we do not know yet
+    # keeps its English text.
+    $featureLabels = $null
+    $labelSource = ''
+    if ($I18nDir) {
+        $candidate = Join-Path $I18nDir 'exp-features.zh.json'
+        if (Test-Path $candidate) { $featureLabels = $candidate; $labelSource = 'local' }
+    }
+    if (-not $featureLabels -and $PSScriptRoot) {
+        $candidate = Join-Path (Join-Path $PSScriptRoot 'i18n') 'exp-features.zh.json'
+        if (Test-Path $candidate) { $featureLabels = $candidate; $labelSource = 'repo' }
+    }
+    if (-not $featureLabels) {
+        $candidate = Join-Path $env:TEMP 'spotx-spicetify-fusion-exp-features.zh.json'
+        try {
+            Invoke-WebRequest -Uri "$FusionRepoRaw/i18n/exp-features.zh.json" -OutFile $candidate -UseBasicParsing
+            $featureLabels = $candidate
+            $labelSource = 'project'
+        }
+        catch {
+            Write-Log "  [~] feature labels: could not fetch the dictionary ($($_.Exception.Message))" "Yellow"
+        }
+    }
+
+    if ($featureLabels) {
+        $json = Get-Content -Path $featureLabels -Raw -Encoding UTF8 | ConvertFrom-Json
+        $map = @{}
+        foreach ($prop in $json.labels.PSObject.Properties) {
+            $value = $prop.Value.ToString()
+            $escaped = New-Object System.Text.StringBuilder
+            foreach ($ch in $value.ToCharArray()) {
+                $code = [int]$ch
+                if ($code -eq 34) { [void]$escaped.Append('\"') }
+                elseif ($code -eq 92) { [void]$escaped.Append('\\') }
+                elseif ($code -gt 127) { [void]$escaped.AppendFormat('\u{0:x4}', $code) }
+                else { [void]$escaped.Append($ch) }
+            }
+            $map[$prop.Name] = $escaped.ToString()
+        }
+        $pairs = @()
+        foreach ($name in ($map.Keys | Sort-Object)) { $pairs += '"' + $name + '":"' + $map[$name] + '"' }
+        $injection = "const zhLabels={" + ($pairs -join ',') + "};const zhLabel=(name,desc)=>zhLabels[name]||desc;"
+
+        foreach ($dir in ($helperDirs | Select-Object -Unique)) {
+            $path = Join-Path $dir 'expFeatures.js'
+            if (-not (Test-Path $path)) { continue }
+            $text = [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8)
+            if ($text.Contains('zhLabel(')) { $uiTranslated++; continue }
+            $anchor = 'let isFallback = false;'
+            $rowLabel = '<label class="col description">${desc}</label>'
+            if (-not $text.Contains($anchor) -or -not $text.Contains($rowLabel)) { $uiDrift.Add('feature labels in expFeatures.js'); continue }
+            $text = $text.Replace($anchor, $anchor + $injection)
+            $text = $text.Replace($rowLabel, '<label class="col description">${zhLabel(name, desc)}</label>')
+            [System.IO.File]::WriteAllText($path, $text, (New-Object System.Text.UTF8Encoding($false)))
+            $uiApplied += $map.Count
+        }
+        Write-Log "  [+] feature labels: $($map.Count) entries applied from the $labelSource dictionary" "Green"
+    }
+
     if ($uiApplied -gt 0) {
         Add-Result -Patch "E: Chinese UI" -Status applied -Detail "$uiApplied label(s) translated (templates + deployed)"
     }

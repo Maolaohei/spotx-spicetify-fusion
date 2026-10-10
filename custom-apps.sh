@@ -112,8 +112,15 @@ run_spicetify() {
         echo -e "${YELLOW}  [!] spicetify $* failed${NC}" >&2
     fi
 }
-run_spicetify config custom_apps Enhancify stats lyrics-plus
-run_spicetify config extensions bookmark.js fullAppDisplay.js keyboardShortcut.js loopyLoop.js popupLyrics.js shuffle+.js trashbin.js webnowplaying.js
+# Spicetify >= 2.45 appends one value per call for list keys; passing several
+# values in one call (the pre-2.45 syntax) makes it treat the extra arguments as
+# config field names and error out, so only the first one would ever be added.
+for app in Enhancify stats lyrics-plus; do
+    run_spicetify config custom_apps "$app"
+done
+for extension in bookmark.js fullAppDisplay.js keyboardShortcut.js loopyLoop.js popupLyrics.js shuffle+.js trashbin.js webnowplaying.js; do
+    run_spicetify config extensions "$extension"
+done
 run_spicetify config sidebar_config 0
 run_spicetify apply
 

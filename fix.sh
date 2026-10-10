@@ -19,6 +19,14 @@ NC='\033[0m'
 
 # This fork is the project the scripts and the docs all point to.
 FUSION_REPO_URL="https://github.com/Maolaohei/spotx-spicetify-fusion"
+FUSION_REPO_RAW="https://raw.githubusercontent.com/Maolaohei/spotx-spicetify-fusion/main"
+
+# Directory of this script, when it is run from a checkout (used to pick up the
+# bundled i18n dictionary instead of downloading it).
+FIX_SH_DIR=""
+if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
+    FIX_SH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fi
 
 echo -e "${CYAN} SpotX + Spicetify Unified Compatibility Hotfix (Linux v2.2)   ${NC}"
 echo -e "${CYAN} Supports Spotify 1.2.x (Webpack) & 1.3.x+ (Rspack, tested 1.3.4) ${NC}"
@@ -95,7 +103,7 @@ fi
 
 # Python 3 helper to execute precise AST/string patching
 apply_patch_python() {
-    FUSION_REPO_URL="$FUSION_REPO_URL" SPOTIFY_DIR="$SPOTIFY_DIR" REPORT_PATH="${REPORT_PATH:-}" python3 - << 'EOF'
+    FUSION_REPO_URL="$FUSION_REPO_URL" FUSION_REPO_RAW="$FUSION_REPO_RAW" FIX_SH_DIR="$FIX_SH_DIR" I18N_DIR="${I18N_DIR:-}" SPOTIFY_DIR="$SPOTIFY_DIR" REPORT_PATH="${REPORT_PATH:-}" python3 - << 'EOF'
 import os
 import sys
 import glob
@@ -153,7 +161,70 @@ CHINESE_UI = [
         ("\"Sidebar config\"", "\"侧边栏配置\""),
     ]),
 ]
-ui_state = {"applied": 0, "translated": 0, "files": 0, "drift": []}
+ui_state = {"applied": 0, "translated": 0, "files": 0, "drift": [], "feature_labels": 0}
+
+# Inner feature labels: expFeatures.js lists Spotify's own flags with their
+# English descriptions. The project ships a name -> Chinese dictionary that is
+# injected as a lookup; flags we do not know yet keep their English text.
+FEATURE_LABELS = {}
+
+def _load_feature_labels():
+    global FEATURE_LABELS
+    candidates = []
+    i18n_dir = os.environ.get("I18N_DIR", "")
+    if i18n_dir:
+        candidates.append(os.path.join(i18n_dir, "exp-features.zh.json"))
+    script_dir = os.environ.get("FIX_SH_DIR", "")
+    if script_dir:
+        candidates.append(os.path.join(script_dir, "i18n", "exp-features.zh.json"))
+    for path in candidates:
+        if os.path.isfile(path):
+            with io.open(path, encoding="utf-8") as f:
+                FEATURE_LABELS = json.load(f).get("labels", {})
+            print("  [+] feature labels: %d entries loaded from %s" % (len(FEATURE_LABELS), path))
+            return
+    url = os.environ.get("FUSION_REPO_RAW", "") + "/i18n/exp-features.zh.json"
+    try:
+        import urllib.request
+        with urllib.request.urlopen(url, timeout=30) as resp:
+            FEATURE_LABELS = json.loads(resp.read().decode("utf-8")).get("labels", {})
+        print("  [+] feature labels: %d entries loaded from the project dictionary" % len(FEATURE_LABELS))
+    except Exception as exc:
+        print("  [~] feature labels: could not load the dictionary (%s)" % exc)
+
+def _js_escape(value):
+    out = []
+    for ch in value:
+        code = ord(ch)
+        if ch == '"':
+            out.append(chr(92) + '"')
+        elif code == 92:
+            out.append(chr(92) * 2)
+        elif code > 127:
+            out.append(chr(92) + "u%04x" % code)
+        else:
+            out.append(ch)
+    return "".join(out)
+
+def _apply_feature_labels(path):
+    with io.open(path, encoding="utf-8") as f:
+        text = f.read()
+    if "zhLabel(" in text:
+        ui_state["translated"] += 1
+        return
+    anchor = "let isFallback = false;"
+    row_label = '<label class="col description">${desc}</label>'
+    if anchor not in text or row_label not in text:
+        ui_state["drift"].append("feature labels in expFeatures.js")
+        return
+    pairs = ",".join('"%s":"%s"' % (name, _js_escape(FEATURE_LABELS[name])) for name in sorted(FEATURE_LABELS))
+    injection = 'const zhLabels={%s};const zhLabel=(name,desc)=>zhLabels[name]||desc;' % pairs
+    text = text.replace(anchor, anchor + injection, 1)
+    text = text.replace(row_label, '<label class="col description">${zhLabel(name, desc)}</label>')
+    with io.open(path, "w", encoding="utf-8", newline="") as f:
+        f.write(text)
+    ui_state["applied"] += len(FEATURE_LABELS)
+    ui_state["feature_labels"] = len(FEATURE_LABELS)
 
 def translate_helpers(helper_dir):
     if not os.path.isdir(helper_dir):
@@ -178,8 +249,13 @@ def translate_helpers(helper_dir):
         with io.open(path, "w", encoding="utf-8", newline="") as f:
             f.write(text)
         ui_state["applied"] += len(pending)
+    if FEATURE_LABELS:
+        feature_path = os.path.join(helper_dir, "expFeatures.js")
+        if os.path.isfile(feature_path):
+            _apply_feature_labels(feature_path)
 
 if not os.environ.get("KEEP_ENGLISH"):
+    _load_feature_labels()
     template_dir = os.environ.get("JS_HELPER_DIR", "")
     if not template_dir:
         candidate = os.path.expanduser("~/.spicetify/jsHelper")
@@ -380,7 +456,10 @@ for xpui_dir in target_dirs:
 if os.environ.get("KEEP_ENGLISH"):
     add_result("E: Chinese UI", "skipped", "disabled with KEEP_ENGLISH=1")
 elif ui_state["applied"]:
-    add_result("E: Chinese UI", "applied", "%d label(s) translated (templates + deployed)" % ui_state["applied"])
+    detail = "%d label(s) translated (templates + deployed)" % ui_state["applied"]
+    if ui_state["feature_labels"]:
+        detail += ", %d feature labels injected" % ui_state["feature_labels"]
+    add_result("E: Chinese UI", "applied", detail)
 elif ui_state["translated"]:
     add_result("E: Chinese UI", "not-needed", "helpers are already translated")
 elif ui_state["files"] == 0:

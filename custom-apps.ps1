@@ -158,8 +158,16 @@ Install-Enhancify
 Install-Stats
 
 Write-Host "Configuring Spicetify custom apps and extensions..." -ForegroundColor Yellow
-Invoke-SpicetifyConfig @('config', 'custom_apps', 'Enhancify', 'stats', 'lyrics-plus')
-Invoke-SpicetifyConfig @('config', 'extensions', 'bookmark.js', 'fullAppDisplay.js', 'keyboardShortcut.js', 'loopyLoop.js', 'popupLyrics.js', 'shuffle+.js', 'trashbin.js', 'webnowplaying.js')
+
+# Spicetify >= 2.45 appends one value per call for list keys; passing several
+# values in one call (the pre-2.45 syntax) makes it treat the extra arguments as
+# config field names and error out, so only the first one would ever be added.
+foreach ($app in @('Enhancify', 'stats', 'lyrics-plus')) {
+    Invoke-SpicetifyConfig @('config', 'custom_apps', $app)
+}
+foreach ($extension in @('bookmark.js', 'fullAppDisplay.js', 'keyboardShortcut.js', 'loopyLoop.js', 'popupLyrics.js', 'shuffle+.js', 'trashbin.js', 'webnowplaying.js')) {
+    Invoke-SpicetifyConfig @('config', 'extensions', $extension)
+}
 Invoke-SpicetifyConfig @('config', 'sidebar_config', '0')
 Invoke-SpicetifyConfig @('apply')
 
