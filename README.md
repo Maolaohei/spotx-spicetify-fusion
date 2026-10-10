@@ -121,7 +121,7 @@ SpotX against it, applies Spicetify 2.45.3 + Marketplace with `spicetify -n`
 (never launches the client), runs `fix.ps1 -SpotifyDir <sandbox>` and asserts
 that an already-correct bundle is left byte-identical. It also verifies that
 every script banner, issue link and README one-liner points at this fork and
-that the published raw URLs resolve (49 assertions). The result is written to
+that the published raw URLs resolve (59 assertions). The result is written to
 `verify-out/offline-e2e.json`.
 
 ```powershell

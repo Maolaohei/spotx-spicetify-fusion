@@ -1,4 +1,4 @@
-﻿# SpotX + Spicetify Fusion - Curated Custom Apps & Extensions Installer
+# SpotX + Spicetify Fusion - Curated Custom Apps and Extensions Installer
 # Project: https://github.com/Maolaohei/spotx-spicetify-fusion
 # Upstream: https://github.com/ZGQ-inc/spotx-spicetify-fusion (MIT)
 #
@@ -32,6 +32,28 @@ $customAppsDir = "$env:APPDATA\spicetify\CustomApps"
 if (-not (Test-Path $customAppsDir)) {
     New-Item -ItemType Directory -Path $customAppsDir -Force | Out-Null
 }
+
+# The curated apps are only useful with a working Spicetify CLI: fail early with
+# a clear message instead of four "spicetify is not recognized" errors.
+$spicetifyCmd = Get-Command spicetify -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $spicetifyCmd) {
+    Write-Host "[X] spicetify CLI not found - run install.ps1 first, then re-run this script." -ForegroundColor Red
+    # No 'exit': this script is documented as "iwr -useb ... | iex", and 'exit'
+    # inside Invoke-Expression closes the caller's console window.
+    $host.SetShouldExit(1)
+    return
+}
+Write-Host "Using spicetify: $($spicetifyCmd.Source)" -ForegroundColor DarkGray
+
+function Invoke-SpicetifyConfig {
+    param([string[]]$Arguments)
+    & spicetify @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        $script:configOk = $false
+        Write-Warning "spicetify $($Arguments -join ' ') failed with exit code $LASTEXITCODE"
+    }
+}
+$configOk = $true
 
 function Install-Enhancify {
     Write-Host "Installing Enhancify..." -ForegroundColor Yellow
@@ -124,12 +146,18 @@ Install-Enhancify
 Install-Stats
 
 Write-Host "Configuring Spicetify custom apps and extensions..." -ForegroundColor Yellow
-spicetify config custom_apps Enhancify stats lyrics-plus
-spicetify config extensions bookmark.js fullAppDisplay.js keyboardShortcut.js loopyLoop.js popupLyrics.js shuffle+.js trashbin.js webnowplaying.js
-spicetify config sidebar_config 0
-spicetify apply
+Invoke-SpicetifyConfig @('config', 'custom_apps', 'Enhancify', 'stats', 'lyrics-plus')
+Invoke-SpicetifyConfig @('config', 'extensions', 'bookmark.js', 'fullAppDisplay.js', 'keyboardShortcut.js', 'loopyLoop.js', 'popupLyrics.js', 'shuffle+.js', 'trashbin.js', 'webnowplaying.js')
+Invoke-SpicetifyConfig @('config', 'sidebar_config', '0')
+Invoke-SpicetifyConfig @('apply')
 
-Invoke-FusionHotfix
+if (Test-Path $SpotifyExe) {
+    Invoke-FusionHotfix
+}
+else {
+    Write-Host "[!] Spotify client not found - skipping the compatibility hotfix." -ForegroundColor Yellow
+    Write-Host "    Run install.ps1 first (it installs Spotify + SpotX), then re-run this script." -ForegroundColor Yellow
+}
 
 Get-Process -Name "Spotify" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 1
@@ -137,4 +165,11 @@ if (Test-Path $SpotifyExe) {
     Start-Process -FilePath $SpotifyExe
 }
 
-Write-Host " Custom apps and extensions installed and patched successfully!" -ForegroundColor Green
+if ($configOk) {
+    Write-Host " Custom apps and extensions installed and patched successfully!" -ForegroundColor Green
+}
+else {
+    Write-Host " Custom apps installed, but the Spicetify configuration reported errors (see above)." -ForegroundColor Yellow
+    $host.SetShouldExit(1)
+    return
+}

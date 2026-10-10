@@ -125,7 +125,12 @@ else {
 }
 if (-not (Test-Path $SpotifyDirResolved)) {
     Write-Log "[-] Spotify installation directory not found!" "Red"
-    exit 1
+    Write-Log "    Install Spotify first (install.ps1), then re-run this hotfix." "Yellow"
+    # No 'exit' here: fix.ps1 is documented as "iwr -useb ... | iex", and 'exit'
+    # inside Invoke-Expression closes the caller's console window. SetShouldExit
+    # reports the failure through -File exit codes instead.
+    $host.SetShouldExit(1)
+    return
 }
 
 $SpotifyExe = Join-Path $SpotifyDirResolved "Spotify.exe"
@@ -137,7 +142,8 @@ $indexHtml = Join-Path $SpotifyAppsDir "index.html"
 if (-not (Test-Path $xpuiJs)) {
     Write-Log "[-] Spotify xpui.js not found at: $xpuiJs" "Red"
     Write-Log "    Please run 'spicetify apply' or 'spicetify backup apply' first." "Yellow"
-    exit 1
+    $host.SetShouldExit(1)
+    return
 }
 
 # Detect Spotify version and architecture

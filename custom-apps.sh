@@ -97,21 +97,40 @@ else
 fi
 
 echo -e "${YELLOW}Configuring Spicetify custom apps and extensions...${NC}"
-spicetify config custom_apps Enhancify stats lyrics-plus || true
-spicetify config extensions bookmark.js fullAppDisplay.js keyboardShortcut.js loopyLoop.js popupLyrics.js shuffle+.js trashbin.js webnowplaying.js || true
-spicetify config sidebar_config 0 || true
-spicetify apply || true
+CONFIG_OK=1
+run_spicetify() {
+    if ! spicetify "$@"; then
+        CONFIG_OK=0
+        echo -e "${YELLOW}  [!] spicetify $* failed${NC}" >&2
+    fi
+}
+run_spicetify config custom_apps Enhancify stats lyrics-plus
+run_spicetify config extensions bookmark.js fullAppDisplay.js keyboardShortcut.js loopyLoop.js popupLyrics.js shuffle+.js trashbin.js webnowplaying.js
+run_spicetify config sidebar_config 0
+run_spicetify apply
 
 echo -e "${YELLOW}Applying the project's compatibility hotfix...${NC}"
 FIX_SH="$TMP_DIR/fix.sh"
+HOTFIX_OK=1
 if curl -fsSL "$FUSION_REPO_RAW/fix.sh" -o "$FIX_SH"; then
-    bash "$FIX_SH" || true
+    if ! bash "$FIX_SH"; then
+        HOTFIX_OK=0
+        echo -e "${YELLOW}  [!] The hotfix reported an error (is Spotify installed? run install.sh first).${NC}" >&2
+    fi
 else
-    echo -e "${YELLOW}[!] Could not fetch the hotfix from ${FUSION_REPO_RAW}/fix.sh${NC}" >&2
-    echo -e "${YELLOW}    Run it manually: curl -fsSL ${FUSION_REPO_RAW}/fix.sh | bash${NC}" >&2
+    HOTFIX_OK=0
+    echo -e "${YELLOW}  [!] Could not fetch the hotfix from ${FUSION_REPO_RAW}/fix.sh${NC}" >&2
+    echo -e "${YELLOW}      Run it manually: curl -fsSL ${FUSION_REPO_RAW}/fix.sh | bash${NC}" >&2
 fi
 
-killall -9 spotify 2>/dev/null || true
-spotify >/dev/null 2>&1 &
+if command -v spotify >/dev/null 2>&1; then
+    killall -9 spotify 2>/dev/null || true
+    spotify >/dev/null 2>&1 &
+fi
 
-echo -e "${GREEN} Custom apps and extensions installed and patched successfully!${NC}"
+if [[ "$CONFIG_OK" -eq 1 && "$HOTFIX_OK" -eq 1 ]]; then
+    echo -e "${GREEN} Custom apps and extensions installed and patched successfully!${NC}"
+else
+    echo -e "${YELLOW} Finished with errors - run install.sh first if Spotify/Spicetify are missing, then re-run this script.${NC}"
+    exit 1
+fi

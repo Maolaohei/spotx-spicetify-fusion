@@ -56,8 +56,7 @@ function Get-UpstreamScript {
     if ($UpstreamDir) {
         $target = Join-Path $UpstreamDir $CacheName
         if (-not (Test-Path $target)) {
-            Write-Host "[-] $Name not found in -UpstreamDir: $target" -ForegroundColor Red
-            exit 1
+            throw "$Name not found in -UpstreamDir: $target"
         }
         $content = [System.IO.File]::ReadAllText($target)
     }
@@ -315,7 +314,11 @@ Add-Check -Name "Marketplace: patched script parses" -Ok ($syntaxErrors.Count -e
 
 if ($VerifyOnly) {
     Write-VerifyReport -Title "Upstream bypass self-check"
-    exit $script:VerifyExitCode
+    # No 'exit': these scripts are documented as "iwr -useb ... | iex" and an
+    # 'exit' inside Invoke-Expression closes the caller's console window.
+    # SetShouldExit keeps the -File exit code while leaving the session alive.
+    $host.SetShouldExit($script:VerifyExitCode)
+    return
 }
 
 function Grant-ChromiumLocalNetworkAccess {
@@ -374,18 +377,33 @@ Start-Sleep -Seconds 3
 # Auto-allow "Access other devices on your local network" in Preferences while running
 Grant-ChromiumLocalNetworkAccess
 
-# Auto-click "Allow" / "允许" on permission prompt via UI Automation
+# Button and window names for the permission prompt. They are built from code
+# points so this published script stays pure ASCII: PowerShell 7's
+# "iwr -useb ... | iex" does not honour the response charset and would turn any
+# non-ASCII byte into "?", which silently breaks those matches.
+$allowButtons = @(
+    'Allow',
+    ([string][char]0x5141 + [string][char]0x8BB8),   # allow (zh)
+    ([string][char]0x540C + [string][char]0x610F),   # agree (zh)
+    ([string][char]0x786E + [string][char]0x5B9A),   # confirm (zh)
+    'OK'
+)
+$windowPattern = 'Spotify|login|permission|network|' + (
+    @([string][char]0x8BBE + [string][char]0x5907, [string][char]0x7F51 + [string][char]0x7EDC) -join '|'
+)
+
+# Auto-click the Allow button on the permission prompt via UI Automation
 try {
     Add-Type -AssemblyName UIAutomationClient -ErrorAction SilentlyContinue
     $root = [System.Windows.Automation.AutomationElement]::RootElement
     $windows = $root.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)
     foreach ($w in $windows) {
         try {
-            if ($w.Current.Name -match "Spotify|login|permission|network|设备|网络" -or $w.Current.ClassName -match "Chrome|Widget") {
+            if ($w.Current.Name -match $windowPattern -or $w.Current.ClassName -match "Chrome|Widget") {
                 $buttons = $w.FindAll([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)))
                 foreach ($btn in $buttons) {
                     $btnName = $btn.Current.Name
-                    if ($btnName -match "^(Allow|允许|同意|确定|OK)$") {
+                    if ($allowButtons -contains $btnName) {
                         $pattern = $btn.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
                         $pattern.Invoke()
                         Write-Host "  [+] Clicked '$btnName' permission button via UI Automation" -ForegroundColor Green

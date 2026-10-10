@@ -393,7 +393,109 @@ foreach ($published in @('fix.ps1', 'fix.sh', 'install.ps1', 'install.sh', 'cust
 }
 
 # ---------------------------------------------------------------------------
-# 8. Curated custom apps (Enhancify / Stats / lyrics-plus)
+# 8. The documented one-liner path: iwr -useb <url> | iex
+# ---------------------------------------------------------------------------
+Write-Step "Verifying the one-liner install path (iwr | iex)"
+
+# PowerShell 7 does not honour the response charset here, so a UTF-8 BOM is
+# decoded as '???'. At the start of a .ps1 that turns the header comment into a
+# command, and any '&' inside it becomes the background operator (observed: a
+# stray background job plus "The term 'Extensions' is not recognized"). Keep
+# every published script pure ASCII so no charset can break it.
+foreach ($script in @('install.ps1', 'fix.ps1', 'custom-apps.ps1', 'fix-marketplace-nav.ps1')) {
+    $bytes = [System.IO.File]::ReadAllBytes((Join-Path $RepoRoot $script))
+    $nonAscii = @($bytes | Where-Object { $_ -gt 127 })
+    Assert-That "$script is pure ASCII (iex-safe)" ($nonAscii.Count -eq 0) -Detail $(if ($nonAscii.Count) { "$($nonAscii.Count) non-ASCII byte(s), first at offset $([array]::IndexOf($bytes, $nonAscii[0]))" } else { 'no BOM, no non-ASCII' })
+}
+
+# 'exit' inside Invoke-Expression closes the caller's console; the scripts must
+# use $host.SetShouldExit(n) + return instead.
+$exitStatements = @(& git -C $RepoRoot grep -n -E '^\s*exit\b' -- install.ps1 fix.ps1 custom-apps.ps1 fix-marketplace-nav.ps1 2>$null)
+Assert-That "no top-level 'exit' in iex-able scripts" ($exitStatements.Count -eq 0) -Detail $(if ($exitStatements.Count) { $exitStatements -join '; ' } else { 'SetShouldExit only' })
+
+$pwshCmd = Get-Command pwsh -ErrorAction SilentlyContinue | Select-Object -First 1
+$pythonCmd = Get-Command python -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $pythonCmd) { $pythonCmd = Get-Command python3 -ErrorAction SilentlyContinue | Select-Object -First 1 }
+
+if ($pwshCmd -and $pythonCmd) {
+    $probe = Join-Path $work "iwr-path-probe.ps1"
+    @'
+param([string]$Url)
+$text = (Invoke-WebRequest -Uri $Url -UseBasicParsing).ToString()
+$tok = $null
+$err = $null
+[void][System.Management.Automation.Language.Parser]::ParseInput($text, [ref]$tok, [ref]$err)
+$first = if ($text.Length -gt 0) { [string]$text[0] } else { '' }
+$kind = if ($tok.Count -gt 0) { $tok[0].Kind.ToString() } else { '' }
+$line = if ($tok.Count -gt 0) { $tok[0].Extent.StartLineNumber } else { 0 }
+[PSCustomObject]@{ First = $first; Errors = $err.Count; FirstToken = $kind; FirstTokenLine = $line } | ConvertTo-Json -Compress
+'@ | Set-Content -Path $probe -Encoding ascii
+
+    # Serve the working tree locally and fetch it with PowerShell 7 exactly like
+    # the documented one-liner does. A mangled first byte turns the header
+    # comment into code (or the '&' into the background operator), which shows
+    # up as a non-comment first token.
+    $port = 8791
+    $server = $null
+    try {
+        $server = Start-Process -FilePath $pythonCmd.Source -ArgumentList '-m', 'http.server', "$port", '--bind', '127.0.0.1', '--directory', $RepoRoot -PassThru -WindowStyle Hidden
+        Start-Sleep -Seconds 2
+        foreach ($script in @('install.ps1', 'fix.ps1', 'custom-apps.ps1')) {
+            $raw = & $pwshCmd.Source -NoProfile -ExecutionPolicy Bypass -File $probe -Url "http://127.0.0.1:$port/$script" 2>$null | Select-Object -Last 1
+            $result = $raw | ConvertFrom-Json
+            $ok = ($result.FirstToken -eq 'Comment') -and ($result.FirstTokenLine -eq 1) -and ($result.Errors -eq 0) -and ($result.First -ne '?')
+            Assert-That "$script survives PowerShell 7 iwr|iex" $ok -Detail "first='$($result.First)' parseErrors=$($result.Errors) firstToken=$($result.FirstToken)@L$($result.FirstTokenLine)"
+        }
+    }
+    finally {
+        if ($server) { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue }
+    }
+}
+else {
+    Assert-That "PowerShell 7 iwr|iex path" $true -Detail "skipped (pwsh or python not installed)"
+}
+
+# Behavioural guard for the failure paths: running the script through iex must
+# not terminate the session (a stray 'exit' used to close the console).
+if ($pwshCmd) {
+    $iexProbe = Join-Path $work "iex-safety-probe.ps1"
+    $sandboxApp = Join-Path $work "iex-appdata"
+    $sandboxLocal = Join-Path $work "iex-localappdata"
+    New-Item -ItemType Directory -Force -Path $sandboxApp, $sandboxLocal | Out-Null
+    foreach ($case in @(
+            @{ Script = 'custom-apps.ps1'; Expect = 'spicetify CLI not found' },
+            @{ Script = 'fix.ps1'; Expect = 'Spotify installation directory not found' }
+        )) {
+        $target = (Join-Path $RepoRoot $case.Script).Replace("'", "''")
+        @"
+`$env:APPDATA = '$sandboxApp'
+`$env:LOCALAPPDATA = '$sandboxLocal'
+`$env:PATH = "`$env:SystemRoot\System32"   # keep spicetify out of reach
+`$code = [System.IO.File]::ReadAllText('$target')
+iex `$code
+Write-Host 'IEX-SENTINEL-ALIVE'
+"@ | Set-Content -Path $iexProbe -Encoding ascii
+
+        $previousEap = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $output = & $pwshCmd.Source -NoProfile -ExecutionPolicy Bypass -File $iexProbe 2>&1 | Out-String
+            $exitCode = $LASTEXITCODE
+        }
+        finally {
+            $ErrorActionPreference = $previousEap
+        }
+        $survived = $output.Contains('IEX-SENTINEL-ALIVE')
+        $reported = $output.Contains($case.Expect)
+        Assert-That "$($case.Script) iex failure path keeps the session alive" ($survived -and $reported -and $exitCode -eq 1) -Detail "sentinel=$survived reported=$reported exit=$exitCode"
+    }
+}
+else {
+    Assert-That "iex failure-path safety" $true -Detail "skipped (pwsh not installed)"
+}
+
+# ---------------------------------------------------------------------------
+# 9. Curated custom apps (Enhancify / Stats / lyrics-plus)
 # ---------------------------------------------------------------------------
 Write-Step "Verifying the curated custom apps"
 
@@ -440,7 +542,7 @@ finally { $enhZipHandle.Dispose() }
 Assert-That "Enhancify 1.0.0 is a flat app bundle" (($enhNames -contains 'manifest.json') -and ($enhNames -contains 'index.js')) -Detail "$($enhNames.Count) entries, manifest + index at root"
 
 # ---------------------------------------------------------------------------
-# 9. Artifact
+# 10. Artifact
 # ---------------------------------------------------------------------------
 Write-Step "Writing artifact"
 $artifact = [PSCustomObject]@{
