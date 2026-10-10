@@ -349,7 +349,9 @@ $linkChecks = @(
     @{ File = 'install.sh'; Name = 'FUSION_REPO_URL'; Pattern = 'FUSION_REPO_URL="([^"]+)"'; Expect = $expectedRepo },
     @{ File = 'install.sh'; Name = 'FUSION_REPO_RAW'; Pattern = 'FUSION_REPO_RAW="([^"]+)"'; Expect = $expectedRaw },
     @{ File = 'fix.ps1'; Name = 'FusionRepoUrl'; Pattern = '\$FusionRepoUrl\s*=\s*''([^'']+)'''; Expect = $expectedRepo },
-    @{ File = 'fix.sh'; Name = 'FUSION_REPO_URL'; Pattern = 'FUSION_REPO_URL="([^"]+)"'; Expect = $expectedRepo }
+    @{ File = 'fix.sh'; Name = 'FUSION_REPO_URL'; Pattern = 'FUSION_REPO_URL="([^"]+)"'; Expect = $expectedRepo },
+    @{ File = 'custom-apps.ps1'; Name = 'FusionRepoRaw'; Pattern = '\$FusionRepoRaw\s*=\s*''([^'']+)'''; Expect = $expectedRaw },
+    @{ File = 'custom-apps.sh'; Name = 'FUSION_REPO_RAW'; Pattern = 'FUSION_REPO_RAW="([^"]+)"'; Expect = $expectedRaw }
 )
 foreach ($check in $linkChecks) {
     $content = [System.IO.File]::ReadAllText((Join-Path $RepoRoot $check.File))
@@ -391,7 +393,54 @@ foreach ($published in @('fix.ps1', 'fix.sh', 'install.ps1', 'install.sh', 'cust
 }
 
 # ---------------------------------------------------------------------------
-# 8. Artifact
+# 8. Curated custom apps (Enhancify / Stats / lyrics-plus)
+# ---------------------------------------------------------------------------
+Write-Step "Verifying the curated custom apps"
+
+# Content checks go through git grep: a PowerShell process must never open
+# custom-apps.ps1 (some endpoint security suites quarantine it on read).
+function Get-GitGrepLines {
+    param([string]$Pattern, [string[]]$Paths)
+    return @(& git -C $RepoRoot grep -n -E $Pattern -- @Paths 2>$null)
+}
+
+$psDelegates = Get-GitGrepLines -Pattern 'FusionRepoRaw/fix\.ps1' -Paths @('custom-apps.ps1')
+$shDelegates = Get-GitGrepLines -Pattern 'FUSION_REPO_RAW/fix\.sh' -Paths @('custom-apps.sh')
+Assert-That "custom-apps.ps1 delegates to fix.ps1" ($psDelegates.Count -ge 1) -Detail "$($psDelegates.Count) reference(s)"
+Assert-That "custom-apps.sh delegates to fix.sh" ($shDelegates.Count -ge 1) -Detail "$($shDelegates.Count) reference(s)"
+
+$duplicated = Get-GitGrepLines -Pattern '0!==d\[e\]&&\(\{|rspackChunk\|\|=\[\]' -Paths @('custom-apps.ps1', 'custom-apps.sh')
+Assert-That "no duplicated Rspack pipeline in custom-apps.*" ($duplicated.Count -eq 0) -Detail $(if ($duplicated.Count) { $duplicated -join '; ' } else { 'single patch pipeline' })
+
+$statsProbe = Get-GitGrepLines -Pattern 'os-resize-observer-host' -Paths @('custom-apps.ps1', 'custom-apps.sh')
+Assert-That "Stats layout patch is probe-based" ($statsProbe.Count -ge 2) -Detail "$($statsProbe.Count) anchor reference(s)"
+
+$enhZipFilter = @((Get-GitGrepLines -Pattern '\.zip' -Paths @('custom-apps.ps1', 'custom-apps.sh')).Count)
+Assert-That "Enhancify asset selection filters .zip" ($enhZipFilter[0] -ge 2) -Detail "$($enhZipFilter[0]) zip reference(s)"
+
+# Real upstream artifacts: the pinned releases the scripts resolve.
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$statsZip = Get-DownloadedFile -Url "https://github.com/harbassan/spicetify-apps/releases/download/stats-v1.1.3/spicetify-stats.release.zip" -Path (Join-Path $CacheDir "stats-v1.1.3.zip") -Name "Stats v1.1.3"
+$enhancifyZip = Get-DownloadedFile -Url "https://github.com/ECE49595-Team-6/EnhancifyInstall/releases/download/1.0.0/EnhancifyInstall-1.0.0.zip" -Path (Join-Path $CacheDir "EnhancifyInstall-1.0.0.zip") -Name "Enhancify 1.0.0"
+
+$statsZipHandle = [System.IO.Compression.ZipFile]::OpenRead($statsZip)
+try {
+    $statsEntry = $statsZipHandle.GetEntry('stats/index.js')
+    $reader = New-Object System.IO.StreamReader($statsEntry.Open())
+    try { $statsJs = $reader.ReadToEnd() } finally { $reader.Dispose() }
+}
+finally { $statsZipHandle.Dispose() }
+Assert-That "Stats v1.1.3 no longer needs the layout patch" (-not $statsJs.Contains('.Root__main-view .os-resize-observer-host')) -Detail "$([math]::Round($statsJs.Length / 1024)) KB bundle, anchor absent"
+
+$enhZipHandle = [System.IO.Compression.ZipFile]::OpenRead($enhancifyZip)
+try {
+    $enhNames = @($enhZipHandle.Entries | ForEach-Object { $_.FullName })
+}
+finally { $enhZipHandle.Dispose() }
+Assert-That "Enhancify 1.0.0 is a flat app bundle" (($enhNames -contains 'manifest.json') -and ($enhNames -contains 'index.js')) -Detail "$($enhNames.Count) entries, manifest + index at root"
+
+# ---------------------------------------------------------------------------
+# 9. Artifact
 # ---------------------------------------------------------------------------
 Write-Step "Writing artifact"
 $artifact = [PSCustomObject]@{

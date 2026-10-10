@@ -59,7 +59,7 @@ curl -fsSL https://raw.githubusercontent.com/Maolaohei/spotx-spicetify-fusion/ma
 
 ### 3. Optional: Install Curated Custom Apps & Extensions
 
-If you want popular third-party apps (**Enhancify**, **Stats** with modern layout fix, **Lyrics Plus**) and essential extensions, run the standalone custom apps installer:
+If you want popular third-party apps (**Enhancify**, **Stats**, **Lyrics Plus**) and essential extensions, run the standalone custom apps installer:
 
 #### Windows
 
@@ -76,11 +76,19 @@ curl -fsSL https://raw.githubusercontent.com/Maolaohei/spotx-spicetify-fusion/ma
 * **Pre-configured Backup (Includes [fix.css](fix.css) UI Patches):** [Download Backup.json](https://raw.githubusercontent.com/Maolaohei/spotx-spicetify-fusion/main/Marketplace-backup.json)
   *(Import Guide: Top Navigation `Marketplace` -> Top Right `Marketplace Settings` -> Bottom `Back up/Restore` -> `Open` -> `Import from file`. This backup already incorporates the [fix.css](fix.css) layout patches and popular themes out-of-the-box)*
 
+* **Always the latest upstream builds**: the script resolves each app from its own
+  latest GitHub release at install time - **Enhancify** `1.0.0` is the newest upstream
+  build (the project has not released since 2024-12), **Stats** installs the newest
+  `stats-*` release and applies its legacy layout patch only if the bundle still
+  contains the old anchor, and **Lyrics Plus** ships inside the Spicetify CLI, so it
+  updates together with the CLI. Client-side patching is delegated to [fix.ps1](fix.ps1)
+  / [fix.sh](fix.sh), so there is only one patch pipeline to maintain.
+
 > [!NOTE]
-> Some endpoint security suites (verified with Huorong 火绒) quarantine `custom-apps.ps1`
-> the moment a PowerShell process reads it, because it downloads and unpacks third-party app
-> bundles. If the file disappears after running it, restore it with
-> `git checkout -- custom-apps.ps1` and whitelist the script or the repository folder.
+> Some endpoint security suites (verified with Huorong 火绒) may quarantine a script
+> that downloads and unpacks third-party app bundles. If `custom-apps.ps1` disappears,
+> restore it with `git checkout -- custom-apps.ps1` and whitelist the file or the
+> repository folder.
 
 ## 🔄 Dependency Drift Self-Check (Spotify / SpotX / Spicetify)
 
@@ -113,7 +121,7 @@ SpotX against it, applies Spicetify 2.45.3 + Marketplace with `spicetify -n`
 (never launches the client), runs `fix.ps1 -SpotifyDir <sandbox>` and asserts
 that an already-correct bundle is left byte-identical. It also verifies that
 every script banner, issue link and README one-liner points at this fork and
-that the published raw URLs resolve (40 assertions). The result is written to
+that the published raw URLs resolve (49 assertions). The result is written to
 `verify-out/offline-e2e.json`.
 
 ```powershell

@@ -58,7 +58,7 @@ curl -fsSL https://raw.githubusercontent.com/Maolaohei/spotx-spicetify-fusion/ma
 
 ### 3. 可选：一键安装精选自定义应用与拓展 (Custom Apps & Extensions)
 
-若需要额外安装精选的第三方独立应用（如 **Enhancify** 增强面板、**Stats** 修复版听歌统计、**Lyrics Plus** 桌面歌词及各类快捷键拓展），运行独立拓展安装脚本即可：
+若需要额外安装精选的第三方独立应用（如 **Enhancify** 增强面板、**Stats** 听歌统计、**Lyrics Plus** 歌词及各类快捷键拓展），运行独立拓展安装脚本即可：
 
 #### Windows
 
@@ -75,10 +75,14 @@ curl -fsSL https://raw.githubusercontent.com/Maolaohei/spotx-spicetify-fusion/ma
 * **懒人美化配置文件备份（已直接内置包含 [fix.css](fix.css)）：** [点击下载 Backup.json](https://raw.githubusercontent.com/Maolaohei/spotx-spicetify-fusion/main/Marketplace-backup.json)
   *(导入方法：顶部导航栏 `Marketplace` -> 右上角 `Marketplace Settings` -> 最底部 `Back up/Restore` -> `Open` -> `Import from file`。该备份已完整打包常用美化配置及全套 [fix.css](fix.css) 样式补丁，导入即可直接生效)*
 
+* **始终取上游最新构建**：脚本在安装时从各自的上游最新 release 解析——**Enhancify**
+  上游最新只有 `1.0.0`（2024-12 之后未再发版）；**Stats** 会装最新的 `stats-*` release，其旧版
+  布局补丁仅在 bundle 仍含旧锚点时才会应用；**Lyrics Plus** 随 Spicetify CLI 一起发布，
+  更新 CLI 即更新它。客户端补丁统一交给 [fix.ps1](fix.ps1) / [fix.sh](fix.sh)，只维护一份。
+
 > [!NOTE]
-> 部分终端安全软件（已实测：火绒）只要 PowerShell 读取 `custom-apps.ps1` 就会直接隔离删除该文件，
-> 因为它会下载并解压第三方应用包。若运行后文件消失，可用 `git checkout -- custom-apps.ps1` 恢复，
-> 并把该脚本或本仓库目录加入信任区。
+> 部分终端安全软件（已实测：火绒）可能隔离“下载并解压第三方应用包”的脚本。若 `custom-apps.ps1`
+> 消失，可用 `git checkout -- custom-apps.ps1` 恢复，并把该脚本或本仓库目录加入信任区。
 
 ## 🔄 依赖漂移自检（Spotify / SpotX / Spicetify）
 
@@ -100,7 +104,7 @@ bash install.sh --verify-only
 
 ### 离线端到端验证（Windows，不安装）
 
-`tools/verify-offline.ps1` 会用已发布的固定工件把整条流水线重跑一遍：下载固定版本的 Spotify 安装包，仅用 `/extract` 解包到临时沙箱（不写注册表、不产生 `%APPDATA%\Spotify`），用真实 SpotX 给它打补丁，再用 `spicetify -n`（**不会启动客户端**）应用 Spicetify 2.45.3 + Marketplace，最后用 `fix.ps1 -SpotifyDir <沙箱>` 处理，并断言“本来就正确”的 bundle 保持字节不变；同时校验所有脚本横幅、issue 链接与 README 一行命令都指向本仓库，并确认已发布的 raw URL 可访问（共 40 项断言）。结果写入 `verify-out/offline-e2e.json`。
+`tools/verify-offline.ps1` 会用已发布的固定工件把整条流水线重跑一遍：下载固定版本的 Spotify 安装包，仅用 `/extract` 解包到临时沙箱（不写注册表、不产生 `%APPDATA%\Spotify`），用真实 SpotX 给它打补丁，再用 `spicetify -n`（**不会启动客户端**）应用 Spicetify 2.45.3 + Marketplace，最后用 `fix.ps1 -SpotifyDir <沙箱>` 处理，并断言“本来就正确”的 bundle 保持字节不变；同时校验所有脚本横幅、issue 链接与 README 一行命令都指向本仓库，并确认已发布的 raw URL 可访问（共 49 项断言）。结果写入 `verify-out/offline-e2e.json`。
 
 ```powershell
 pwsh tools/verify-offline.ps1
