@@ -65,7 +65,13 @@ curl -fsSL https://raw.githubusercontent.com/Maolaohei/spotx-spicetify-fusion/ma
 
 ### 3. Optional: Install Curated Custom Apps & Extensions
 
-If you want popular third-party apps (**Enhancify**, **Stats**, **Lyrics Plus**) and essential extensions, run the standalone custom apps installer:
+If you want popular third-party apps (**Lyrics Plus**, **Enhancify**, **Stats**) and essential extensions, run the standalone custom apps installer:
+
+The curated nav set is **Lyrics Plus (歌词) + Marketplace**: those are the only
+entries enabled and shown. **Enhancify** and **Stats** are still fetched (their
+files and compatibility patches stay available) but are left disabled, and the
+hotfix hides both nav entries - run `fix.ps1 -ShowAllApps` (or
+`SHOW_ALL_APPS=1 bash fix.sh`) to show every custom-app entry again.
 
 #### Windows
 
@@ -89,6 +95,11 @@ curl -fsSL https://raw.githubusercontent.com/Maolaohei/spotx-spicetify-fusion/ma
   contains the old anchor, and **Lyrics Plus** ships inside the Spicetify CLI, so it
   updates together with the CLI. Client-side patching is delegated to [fix.ps1](fix.ps1)
   / [fix.sh](fix.sh), so there is only one patch pipeline to maintain.
+
+* **Curated nav set**: only **Lyrics Plus (歌词)** and **Marketplace** land in
+  `custom_apps`. **Enhancify** and **Stats** are installed but intentionally left
+  disabled, and [fix.ps1](fix.ps1) / [fix.sh](fix.sh) hide both entries in the
+  managed `/* fusion:navhide */` block (top-bar and expanded-library variants).
 
 > [!NOTE]
 > Some endpoint security suites (verified with Huorong 火绒) may quarantine a script
@@ -127,7 +138,7 @@ SpotX against it, applies Spicetify 2.45.3 + Marketplace with `spicetify -n`
 (never launches the client), runs `fix.ps1 -SpotifyDir <sandbox>` and asserts
 that an already-correct bundle is left byte-identical. It also verifies that
 every script banner, issue link and README one-liner points at this fork and
-that the published raw URLs resolve (109 assertions). The result is written to
+that the published raw URLs resolve (131 assertions). The result is written to
 `verify-out/offline-e2e.json`.
 
 ```powershell
@@ -303,7 +314,7 @@ Properties:
 - Verified on Spotify `1.2.99.317.g9bd8c54d` + Spicetify `2.44.0`, Windows 11 (2026-09-07). Re-run after a Spotify
   update, `spicetify apply` / `backup apply` / `restore`, or a Spicetify upgrade.
 
-9. **Custom-app DOM compatibility with Spotify 1.3.x**: the curated apps and Spicetify's own `lyrics-plus`/`reddit` were written against 1.2.x DOM ids (`main-topBar-topbarContentWrapper`, `.Root__main-view`, `.os-viewport`, `.os-resize-observer-host`). On 1.3.x those lookups return `null`, the app throws while rendering (`React error #200` from `createPortal(children, null)`, or a `null` deref on `clientWidth`/`offsetTop`) and Spotify shows the fatal dialog again. Each selector keeps the legacy form first and appends the 1.3.x fallback (`#global-nav-bar`, `.main-view-container__scroll-node`, `.main-view-container`) plus null guards, and both the app sources and the deployed route bundles are patched.
+9. **Custom-app DOM compatibility with Spotify 1.3.x**: the curated apps and Spicetify's own `lyrics-plus`/`reddit` were written against 1.2.x DOM ids (`main-topBar-topbarContentWrapper`, `.Root__main-view`, `.os-viewport`, `.os-resize-observer-host`). On 1.3.x those lookups return `null`, the app throws while rendering (`React error #200` from `createPortal(children, null)`, or a `null` deref on `clientWidth`/`offsetTop`) and Spotify shows the fatal dialog again. Each selector keeps the legacy form first and appends the 1.3.x fallback (`#global-nav-bar`, `.main-view-container__scroll-node`, `.main-view-container`) plus null guards, and both the app sources and the deployed route bundles are patched. The app top-bar/tab-bar portal now falls back to the **page content** (`.main-view-container__scroll-node`) instead of the custom-navlinks container, so entering an app no longer stacks its tab bar on top of the extra-app row (`y=-24` and overlapping chips). The managed `/* fusion:navhide */` rules then hide the **Enhancify** and **Statistics** entries in both nav variants; `-ShowAllApps` / `SHOW_ALL_APPS=1` reverts to showing every entry.
 
 ## 📚 Investigative Blog Articles (In-Depth Technical Deep Dive)
 

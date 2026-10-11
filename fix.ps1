@@ -37,11 +37,13 @@ param(
     [switch]$Force,
     [switch]$NoStop,
     [switch]$KeepEnglish,
+    [switch]$ShowAllApps,
     [string]$SpotifyDir,
     [string]$JsHelperDir,
     [string]$I18nDir,
     [string]$SpicetifyUserAppsDir,
     [string]$SpicetifyCliAppsDir,
+    [string]$ThemeDir,
     [string]$ReportPath
 )
 
@@ -436,6 +438,9 @@ $c1Unknown = 0
 $c2Applied = 0
 $c2Clean = 0
 $c2Unknown = 0
+$c3Applied = 0
+$c3Clean = 0
+$c3Unknown = 0
 
 foreach ($wrapperPath in ($WrapperFiles | Select-Object -Unique)) {
     Write-Log "[*] Inspecting $wrapperPath..." "Cyan"
@@ -493,6 +498,25 @@ foreach ($wrapperPath in ($WrapperFiles | Select-Object -Unique)) {
         $c2Unknown++
     }
 
+    # C3: the client renders its nav bar before the wrapper has bound
+    # Spicetify.React, and _renderNavLinks() reads Spicetify.React.useReducer
+    # unconditionally - the throw lands in Spotify's error boundary and the whole
+    # UI is replaced by the fatal dialog on startup. Return early instead; the
+    # wrapper calls refreshNavLinks() once the modules are ready, which renders
+    # the links properly.
+    $navLinkAnchor = 'Spicetify._renderNavLinks=(e,t)=>{'
+    if ($wrapContent.Contains('/*fusion:navlinks*/')) {
+        $c3Clean++
+    }
+    elseif ($wrapContent.Contains($navLinkAnchor) -and $wrapContent.Contains('Spicetify.React.useReducer')) {
+        $wrapContent = $wrapContent.Replace($navLinkAnchor, 'Spicetify._renderNavLinks=(e,t)=>{if(!Spicetify.React||!Spicetify.React.useReducer)return null;/*fusion:navlinks*/')
+        $wrapPatched = $true
+        $c3Applied++
+    }
+    else {
+        $c3Unknown++
+    }
+
     if ($wrapPatched) {
         [System.IO.File]::WriteAllText($wrapperPath, $wrapContent, (New-Object System.Text.UTF8Encoding($false)))
         Write-Log "[SUCCESS] Patched $wrapperPath" "Green"
@@ -520,6 +544,16 @@ elseif ($c2Clean -gt 0) {
 }
 else {
     Add-Result -Patch "C2: URI self-start" -Status failed -Detail "wrapper anchor not found; URI may stay undefined for extensions"
+}
+
+if ($c3Applied -gt 0) {
+    Add-Result -Patch "C3: nav render guard" -Status applied -Detail "$c3Applied wrapper(s) no longer crash before Spicetify.React is bound"
+}
+elseif ($c3Clean -gt 0) {
+    Add-Result -Patch "C3: nav render guard" -Status not-needed -Detail "$c3Clean wrapper(s) already guarded"
+}
+else {
+    Add-Result -Patch "C3: nav render guard" -Status failed -Detail "_renderNavLinks anchor not found"
 }
 
 # SECTION D: Fix custom apps push headers in spicetify-routes-*.js
@@ -572,7 +606,8 @@ $appPatchSet = @{
         Name   = 'D2: app top-bar container'
         Marker = '/*fusion:topbar*/'
         Old    = 'document.querySelector(".main-topBar-topbarContentWrapper")'
-        New    = '(document.querySelector(".main-topBar-topbarContentWrapper") || document.querySelector("#global-nav-bar .custom-navlinks-scrollable_container") || document.querySelector("#global-nav-bar") || document.body)/*fusion:topbar*/'
+        Old2   = '(document.querySelector(".main-topBar-topbarContentWrapper") || document.querySelector("#global-nav-bar .custom-navlinks-scrollable_container") || document.querySelector("#global-nav-bar") || document.body)/*fusion:topbar*/'
+        New    = '(document.querySelector(".main-topBar-topbarContentWrapper") || document.querySelector(".main-view-container__scroll-node") || document.querySelector(".main-view-container") || document.querySelector("#main") || document.body)/*fusion:topbar*/'
     }
     'viewportChain' = @{
         Name   = 'D2: lyrics-plus main-view selectors'
@@ -639,8 +674,9 @@ foreach ($target in $appTargets) {
     foreach ($key in $target.Patches) {
         $patch = $appPatchSet[$key]
         if ($content.Contains($patch.Marker)) { continue }
-        if (-not $content.Contains($patch.Old)) { continue }
-        $content = $content.Replace($patch.Old, $patch.New)
+        $oldText = if ($content.Contains($patch.Old)) { $patch.Old } elseif ($patch.Old2 -and $content.Contains($patch.Old2)) { $patch.Old2 } else { $null }
+        if (-not $oldText) { continue }
+        $content = $content.Replace($oldText, $patch.New)
         $appPatchStats[$key]++
         $changed = $true
     }
@@ -661,6 +697,221 @@ foreach ($key in $appPatchSet.Keys) {
     else {
         Add-Result -Patch $name -Status skipped -Detail "no Spicetify CustomApps directory found"
     }
+}
+
+# SECTION H: styling for the extra-app entries Spicetify adds to the global nav
+#   bar. Everything is written into the active theme's user.css (Spicetify
+#   re-emits it on every `spicetify apply`) and into the deployed user.css, and
+#   the managed block owns the tail of those files, so re-running never stacks
+#   duplicate rules. The app icons come from each app manifest (arbitrary
+#   viewBoxes, mixed colours); they are replaced with Spotify's own single-path
+#   16x16 currentColor glyphs so all entries match the native icons.
+$navStyleCss = @'
+/* fusion:navstyle */
+/* Unify the extra-app entries Spicetify adds to the global nav bar so they read
+   as one set with Spotify's own icons (48x48, border-radius 9999px, 24px glyph,
+   #b3b3b3, hover/press #242424/#000000, 8px rhythm) and stay aligned with them
+   on every window size. Managed block: everything from this marker to the end of
+   the file is regenerated on every hotfix run. */
+#global-nav-bar .custom-navlinks-scrollable_container {
+  display: flex;
+  align-items: center;
+  align-self: center;
+  min-width: 0;
+}
+#global-nav-bar .custom-navlinks-scrollable_container > .spicetify-sc-contentArea {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+#global-nav-bar .custom-navlink {
+  --encore-icon-width: 24px;
+  --encore-icon-height: 24px;
+  --encore-graphic-size-decorative-base: 24px;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 48px !important;
+  height: 48px !important;
+  min-width: 48px !important;
+  padding: 0 !important;
+  margin: 0 4px !important;
+  border: 0 !important;
+  border-radius: 9999px !important;
+  background-color: transparent;
+  color: var(--text-subdued, #b3b3b3);
+  flex: 0 0 auto;
+  overflow: hidden;
+  transition: color .15s ease, background-color .15s ease;
+}
+#global-nav-bar .custom-navlink:hover {
+  color: var(--text-base, #ffffff);
+  background-color: var(--background-highlight, #242424);
+}
+#global-nav-bar .custom-navlink:active {
+  background-color: var(--background-press, #000000);
+}
+#global-nav-bar .custom-navlink:focus-visible {
+  outline: 2px solid var(--text-base, #ffffff);
+  outline-offset: 2px;
+}
+#global-nav-bar .custom-navlink[aria-current="page"],
+#global-nav-bar .custom-navlink.link-subtle.active {
+  color: var(--text-base, #ffffff);
+  background-color: var(--background-highlight, #242424);
+}
+#global-nav-bar .custom-navlink .e-10860-button__icon-wrapper {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+}
+#global-nav-bar .custom-navlink .e-10860-button__icon-wrapper > svg {
+  display: block;
+  width: 24px;
+  height: 24px;
+  max-width: 100%;
+  max-height: 100%;
+}
+#global-nav-bar .custom-navlink .e-10860-button__icon-wrapper > svg > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 2px;
+  box-sizing: border-box;
+}
+#global-nav-bar .custom-navlink svg,
+#global-nav-bar .custom-navlink svg * {
+  fill: currentColor;
+  stroke: none;
+}
+@media (max-width: 1100px) {
+  #global-nav-bar .custom-navlink {
+    --encore-icon-width: 20px;
+    --encore-icon-height: 20px;
+    --encore-graphic-size-decorative-base: 20px;
+    width: 40px !important;
+    height: 40px !important;
+    min-width: 40px !important;
+  }
+  #global-nav-bar .custom-navlink .e-10860-button__icon-wrapper,
+  #global-nav-bar .custom-navlink .e-10860-button__icon-wrapper > svg {
+    width: 20px;
+    height: 20px;
+  }
+}
+'@
+
+# Curated visibility: Enhancify and Statistics stay installed, but their nav
+#   entries are hidden - both the top-bar ButtonTertiary variant and the
+#   expanded-library list variant. Pass -ShowAllApps to drop this block and show
+#   every custom-app entry again. The rules target the entries by aria-label,
+#   which is the app name from the route manifest.
+$navHideCss = @'
+/* fusion:navhide */
+/* Curated nav visibility: Enhancify / Statistics are hidden by request. Remove
+   this block (or re-run the hotfix with -ShowAllApps) to show them again. */
+#global-nav-bar .custom-navlink[aria-label="Enhancify"],
+#global-nav-bar .custom-navlink[aria-label="Statistics"],
+.main-yourLibraryX-navItem:has(.main-yourLibraryX-navLink[aria-label="Enhancify"]),
+.main-yourLibraryX-navItem:has(.main-yourLibraryX-navLink[aria-label="Statistics"]) {
+  display: none !important;
+}
+'@
+if (-not $ShowAllApps) { $navStyleCss = $navStyleCss.TrimEnd() + "`n" + $navHideCss + "`n" }
+
+$fusionNavIconAttr = 'viewBox="0 0 16 16" width="24" height="24" fill="currentColor" data-fusion-navicon="1"'
+$fusionNavIcons = @{
+    'marketplace' = '<svg role="img" aria-hidden="true" ' + $fusionNavIconAttr + '><path d="M9 1v6h6V1H9zm5 5h-4V2h4v4zM.999 7h6V1h-6v6zM2 2h4v4H2V2zm7 13h6V9H9v6zm1-5h4v4h-4v-4zM.999 15h6V9h-6v6zM2 10h4v4H2v-4z"/></svg>'
+    'stats' = '<svg role="img" aria-hidden="true" ' + $fusionNavIconAttr + '><path d="M.999 15h2V5h-2v10zm4 0h2V1h-2v14zM9 15h2v-4H9v4zm4-7v7h2V8h-2z"/></svg>'
+    'lyrics-plus' = '<svg role="img" aria-hidden="true" ' + $fusionNavIconAttr + '><path d="M8.5 1A4.505 4.505 0 004 5.5c0 .731.191 1.411.502 2.022L1.99 13.163a1.307 1.307 0 00.541 1.666l.605.349a1.307 1.307 0 001.649-.283L9.009 9.95C11.248 9.692 13 7.807 13 5.5 13 3.019 10.981 1 8.5 1zM4.023 14.245a.307.307 0 01-.388.066l-.605-.349a.309.309 0 01-.128-.393l2.26-5.078A4.476 4.476 0 007.715 9.92l-3.692 4.325zM8.5 9C6.57 9 5 7.43 5 5.5S6.57 2 8.5 2 12 3.57 12 5.5 10.429 9 8.5 9z"/></svg>'
+    'Enhancify' = '<svg role="img" aria-hidden="true" ' + $fusionNavIconAttr + '><path d="M11.777.972c-.364 1.054-1.195 2.322-2.798 2.83-.115.036-.115.36 0 .396 1.603.508 2.434 1.775 2.798 2.83.04.114.406.114.446 0 .364-1.055 1.195-2.322 2.798-2.83.115-.036.115-.36 0-.396-1.603-.508-2.434-1.776-2.798-2.83-.04-.114-.406-.114-.446 0zM5.295 4.5a.75.75 0 01.747.682c.06.65.334 1.68.954 2.572.606.87 1.527 1.596 2.927 1.75a.75.75 0 010 1.491c-1.4.154-2.321.88-2.927 1.751a5.683 5.683 0 00-.954 2.572.75.75 0 01-1.493 0 5.683 5.683 0 00-.954-2.572c-.606-.87-1.527-1.597-2.927-1.75a.75.75 0 010-1.492c1.4-.154 2.321-.88 2.927-1.75.62-.892.894-1.922.954-2.572a.75.75 0 01.746-.682z"/></svg>'
+}
+
+$activeTheme = ''
+$configPath = Join-Path $env:APPDATA "spicetify\config-xpui.ini"
+if (Test-Path $configPath) {
+    $themeMatch = [regex]::Match([System.IO.File]::ReadAllText($configPath), '(?m)^current_theme\s*=\s*(\S+)')
+    if ($themeMatch.Success) { $activeTheme = $themeMatch.Groups[1].Value }
+}
+
+$navStyleTargets = New-Object System.Collections.Generic.List[string]
+if ($ThemeDir) { $navStyleTargets.Add((Join-Path $ThemeDir "user.css")) }
+elseif ($activeTheme) { $navStyleTargets.Add((Join-Path $env:APPDATA "spicetify\Themes\$activeTheme\user.css")) }
+$navStyleTargets.Add((Join-Path $SpotifyAppsDir "user.css"))
+
+$styleApplied = 0
+$styleClean = 0
+foreach ($cssPath in ($navStyleTargets | Select-Object -Unique)) {
+    $cssDir = Split-Path $cssPath -Parent
+    if (-not (Test-Path $cssDir)) { try { New-Item -ItemType Directory -Path $cssDir -Force | Out-Null } catch { continue } }
+    $cssText = ''
+    if (Test-Path $cssPath) { $cssText = [System.IO.File]::ReadAllText($cssPath, [System.Text.Encoding]::UTF8) }
+    if ($cssText.Contains('/* fusion:navstyle */')) {
+        $head = $cssText.Split('/* fusion:navstyle */')[0].TrimEnd()
+        # Windows PowerShell 5.1 cannot parse `(if (..) {..} else {..})` as an
+        # expression, so keep this as statements (the deployed user.css was
+        # truncated to 0 bytes when a stray parse error left $newCss null).
+        $newCss = $navStyleCss + "`n"
+        if ($head) { $newCss = $head + "`n" + $newCss }
+        if ($newCss -ne $cssText) {
+            [System.IO.File]::WriteAllText($cssPath, $newCss, (New-Object System.Text.UTF8Encoding($false)))
+            $styleClean++
+        }
+    }
+    else {
+        $prefix = if ($cssText -and -not $cssText.EndsWith("`n")) { $cssText + "`n" } else { $cssText }
+        [System.IO.File]::WriteAllText($cssPath, $prefix + $navStyleCss + "`n", (New-Object System.Text.UTF8Encoding($false)))
+        $styleApplied++
+    }
+}
+if ($styleApplied -gt 0) {
+    Add-Result -Patch "H: nav styling" -Status applied -Detail "$styleApplied user.css file(s) written (theme + deployed)"
+}
+elseif ($styleClean -gt 0) {
+    Add-Result -Patch "H: nav styling" -Status applied -Detail "$styleClean managed block(s) refreshed"
+}
+else {
+    Add-Result -Patch "H: nav styling" -Status not-needed -Detail "managed block already current"
+}
+
+if ($ShowAllApps) {
+    Add-Result -Patch "H: nav visibility" -Status skipped -Detail "disabled with -ShowAllApps - every custom-app entry stays visible"
+}
+elseif ($styleApplied -gt 0 -or $styleClean -gt 0) {
+    Add-Result -Patch "H: nav visibility" -Status applied -Detail "curated set: Enhancify / Statistics entries hidden"
+}
+else {
+    Add-Result -Patch "H: nav visibility" -Status not-needed -Detail "curated set already in effect"
+}
+
+$iconApplied = 0
+foreach ($appName in $fusionNavIcons.Keys) {
+    $icon = $fusionNavIcons[$appName]
+    $candidates = @(
+        (Join-Path $userAppsDir "$appName\manifest.json"),
+        (Join-Path $cliAppsDir "$appName\manifest.json"),
+        (Join-Path $SpotifyAppsDir "spicetify-routes-$appName.json")
+    )
+    foreach ($jsonPath in $candidates) {
+        if (-not (Test-Path $jsonPath)) { continue }
+        try { $data = Get-Content -Path $jsonPath -Raw -Encoding UTF8 | ConvertFrom-Json } catch { continue }
+        if ($data.icon -eq $icon -and $data.'active-icon' -eq $icon) { continue }
+        $data.icon = $icon
+        if ($data.PSObject.Properties.Name -contains 'active-icon') { $data.'active-icon' = $icon }
+        [System.IO.File]::WriteAllText($jsonPath, ($data | ConvertTo-Json -Depth 20), (New-Object System.Text.UTF8Encoding($false)))
+        $iconApplied++
+    }
+}
+if ($iconApplied -gt 0) {
+    Add-Result -Patch "H: nav icons" -Status applied -Detail "$iconApplied manifest/route file(s) switched to Spotify-style glyphs"
+}
+elseif ((Test-Path $userAppsDir) -or (Test-Path $cliAppsDir)) {
+    Add-Result -Patch "H: nav icons" -Status not-needed -Detail "all app icons already unified"
+}
+else {
+    Add-Result -Patch "H: nav icons" -Status skipped -Detail "no Spicetify CustomApps directory found"
 }
 
 # SECTION E: Chinese UI for Spicetify's helper panels

@@ -358,6 +358,13 @@ $d2Root = Join-Path $work "d2-apps"
 $d2User = Join-Path $d2Root "user"
 $d2Cli = Join-Path $d2Root "cli"
 New-Item -ItemType Directory -Force -Path (Join-Path $d2User "stats"), (Join-Path $d2User "marketplace"), (Join-Path $d2Cli "lyrics-plus"), (Join-Path $d2Cli "reddit") | Out-Null
+$d2ThemeDir = Join-Path $d2Root "theme"
+New-Item -ItemType Directory -Force -Path $d2ThemeDir | Out-Null
+foreach ($fixtureApp in @("stats", "marketplace", "lyrics-plus", "Enhancify")) {
+    $manifestDir = if ($fixtureApp -eq "stats" -or $fixtureApp -eq "marketplace") { Join-Path $d2User $fixtureApp } else { Join-Path $d2Cli $fixtureApp }
+    New-Item -ItemType Directory -Force -Path $manifestDir | Out-Null
+    '{ "name": "' + $fixtureApp + '", "icon": "<svg viewBox=\"0 0 99 99\"><path d=\"M0 0h1v1H0z\"/></svg>" }' | Set-Content -Path (Join-Path $manifestDir "manifest.json") -Encoding ascii
+}
 $d2Topbar = 'const nav = document.querySelector(".main-topBar-topbarContentWrapper");'
 Set-Content -Path (Join-Path $d2User "stats\index.js") -Value $d2Topbar -Encoding ascii
 Set-Content -Path (Join-Path $d2User "marketplace\index.js") -Value $d2Topbar -Encoding ascii
@@ -383,7 +390,7 @@ $ErrorActionPreference = 'Continue'
 try {
     # -JsHelperDir points at the sandbox copy of the CLI so the template
     # translation is verified without touching the machine's real Spicetify.
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $fixPs1 -Quiet -NoStop -JsHelperDir (Join-Path $spicetifyDir "jsHelper") -I18nDir (Join-Path $RepoRoot "i18n") -SpotifyDir $extracted -SpicetifyUserAppsDir $d2User -SpicetifyCliAppsDir $d2Cli -ReportPath $fixReport
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $fixPs1 -Quiet -NoStop -JsHelperDir (Join-Path $spicetifyDir "jsHelper") -I18nDir (Join-Path $RepoRoot "i18n") -SpotifyDir $extracted -SpicetifyUserAppsDir $d2User -SpicetifyCliAppsDir $d2Cli -ThemeDir $d2ThemeDir -ReportPath $fixReport
     $fixExit = $LASTEXITCODE
 }
 finally {
@@ -464,6 +471,60 @@ else {
     Assert-That "fixture parse check" $true -Detail "skipped (node not installed)"
 }
 
+$d2FixturesApplied = $true
+# H: the managed styling block must land in the theme and the deployed user.css
+# with the Spotify-native values, and must not leave the old rule behind.
+$themeCss = Join-Path $d2ThemeDir "user.css"
+$clientCss = Join-Path $appsDir "user.css"
+Assert-That "theme user.css carries the managed block" ((Get-Content -Path $themeCss -Raw -Encoding UTF8).Contains('/* fusion:navstyle */')) -Detail "theme + deployed"
+$styleText = Get-Content -Path $themeCss -Raw -Encoding UTF8
+Assert-That "nav entries use Spotify's circular button shape" ($styleText.Contains('border-radius: 9999px')) -Detail "matches Spotify's own 48x48 pills"
+Assert-That "nav entries align with the native row" ($styleText.Contains('align-self: center') -and $styleText.Contains('margin: 0 4px')) -Detail "8px rhythm, vertically centred"
+Assert-That "no stale 8px rule left in the block" (-not $styleText.Contains('border-radius: 8px')) -Detail "single managed block"
+Assert-That "deployed user.css got the block too" ((Get-Content -Path $clientCss -Raw -Encoding UTF8).Contains('/* fusion:navstyle */')) -Detail "applies without a rebuild"
+
+# H: every fixture manifest switched to the Spotify-style glyph
+foreach ($fixtureApp in @("stats", "marketplace", "lyrics-plus", "Enhancify")) {
+    $manifestDir = if ($fixtureApp -eq "stats" -or $fixtureApp -eq "marketplace") { Join-Path $d2User $fixtureApp } else { Join-Path $d2Cli $fixtureApp }
+    $iconText = Get-Content -Path (Join-Path $manifestDir "manifest.json") -Raw -Encoding UTF8
+    Assert-That "icon unified: $fixtureApp" ($iconText.Contains('data-fusion-navicon') -and $iconText.Contains('viewBox=\"0 0 16 16\"')) -Detail "single 16x16 currentColor glyph"
+}
+$routeIcon = Get-Content -Path (Join-Path $appsDir "spicetify-routes-marketplace.json") -Raw -Encoding UTF8
+Assert-That "deployed route manifest icon unified" ($routeIcon.Contains('data-fusion-navicon')) -Detail "nav renders the unified glyph"
+
+# C3: the nav renderer must not throw before Spicetify.React is bound
+$wrapperDeployed = [System.IO.File]::ReadAllText((Join-Path $appsDir "helper\spicetifyWrapper.js"), [System.Text.Encoding]::UTF8)
+$wrapperTemplate = [System.IO.File]::ReadAllText((Join-Path $spicetifyDir "jsHelper\spicetifyWrapper.js"), [System.Text.Encoding]::UTF8)
+Assert-That "deployed wrapper guards _renderNavLinks" ($wrapperDeployed.Contains('/*fusion:navlinks*/')) -Detail "returns early until React is bound"
+Assert-That "CLI template guards _renderNavLinks" ($wrapperTemplate.Contains('/*fusion:navlinks*/')) -Detail "survives spicetify apply"
+
+# D2 overlap regression guard: app tab bars must never be portaled into the nav
+# container (that made the container taller and pushed the icons off the row).
+$topbarChain = 'document.querySelector(".main-view-container__scroll-node")'
+Assert-That "app top-bar fallback targets the page content" ($d2FixturesApplied -and (Get-Content -Path (Join-Path $d2User "stats\index.js") -Raw -Encoding UTF8).Contains($topbarChain)) -Detail "no nav-container portal"
+Assert-That "nav container no longer a portal target" (-not ((Get-Content -Path (Join-Path $d2User "stats\index.js") -Raw -Encoding UTF8).Contains('custom-navlinks-scrollable_container'))) -Detail "prevents the overlap with the extra-app row"
+
+# H: curated nav visibility - Enhancify / Statistics are hidden by default (in
+# both nav variants), and -ShowAllApps must be able to bring them back.
+Assert-That "curated hide rules landed in both nav variants" ($styleText.Contains('fusion:navhide') -and $styleText.Contains('aria-label="Enhancify"') -and $styleText.Contains('aria-label="Statistics"') -and $styleText.Contains('.main-yourLibraryX-navItem:has(')) -Detail "top bar + expanded library"
+$navVis = $report.results | Where-Object { $_.Patch -eq 'H: nav visibility' } | Select-Object -First 1
+Assert-That "H: nav visibility reported" ($navVis -and $navVis.status -eq 'applied') -Detail $(if ($navVis) { "$($navVis.status): $($navVis.detail)" } else { 'missing entry' })
+
+$showAllDir = Join-Path $d2Root "theme-showall"
+New-Item -ItemType Directory -Force -Path $showAllDir | Out-Null
+$showAllReport = Join-Path $OutDir "fix-report-showall.json"
+$ErrorActionPreference = 'Continue'
+try {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $fixPs1 -Quiet -NoStop -ShowAllApps -JsHelperDir (Join-Path $spicetifyDir "jsHelper") -I18nDir (Join-Path $RepoRoot "i18n") -SpotifyDir $extracted -SpicetifyUserAppsDir $d2User -SpicetifyCliAppsDir $d2Cli -ThemeDir $showAllDir -ReportPath $showAllReport
+}
+finally {
+    $ErrorActionPreference = $previousEap
+}
+$showAllCss = Get-Content -Path (Join-Path $showAllDir "user.css") -Raw -Encoding UTF8
+Assert-That "-ShowAllApps regenerates the block without curated hides" ((-not $showAllCss.Contains('fusion:navhide')) -and $showAllCss.Contains('/* fusion:navstyle */')) -Detail "opt-out works"
+$showAllVis = (Get-Content -Path $showAllReport -Raw | ConvertFrom-Json).results | Where-Object { $_.Patch -eq 'H: nav visibility' } | Select-Object -First 1
+Assert-That "H: nav visibility reports the opt-out" ($showAllVis -and $showAllVis.status -eq 'skipped') -Detail $(if ($showAllVis) { $showAllVis.status } else { 'missing entry' })
+
 $b4 = $report.results | Where-Object { $_.Patch -like 'B4*' } | Select-Object -First 1
 Assert-That "B4 reports Spicetify-managed chunk map" ($b4 -and $b4.status -eq 'not-needed') -Detail $(if ($b4) { "$($b4.status): $($b4.detail)" } else { "missing entry" })
 
@@ -502,7 +563,7 @@ $deployedHomeHash = Get-FileHash256 (Join-Path $appsDir "helper\homeConfig.js")
 $secondReport = Join-Path $OutDir "fix-report-second.json"
 $ErrorActionPreference = 'Continue'
 try {
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $fixPs1 -Quiet -NoStop -JsHelperDir (Join-Path $spicetifyDir "jsHelper") -I18nDir (Join-Path $RepoRoot "i18n") -SpotifyDir $extracted -SpicetifyUserAppsDir $d2User -SpicetifyCliAppsDir $d2Cli -ReportPath $secondReport
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $fixPs1 -Quiet -NoStop -JsHelperDir (Join-Path $spicetifyDir "jsHelper") -I18nDir (Join-Path $RepoRoot "i18n") -SpotifyDir $extracted -SpicetifyUserAppsDir $d2User -SpicetifyCliAppsDir $d2Cli -ThemeDir $d2ThemeDir -ReportPath $secondReport
 }
 finally {
     $ErrorActionPreference = $previousEap
@@ -512,6 +573,11 @@ $secondUi = $secondRun.results | Where-Object { $_.Patch -like 'E: Chinese UI*' 
 Assert-That "second run leaves the translations alone" ((Get-FileHash256 (Join-Path $appsDir "helper\expFeatures.js")) -eq $deployedExpHash) -Detail "expFeatures.js unchanged"
 Assert-That "second run reports E as not-needed" ($secondUi -and $secondUi.status -eq 'not-needed') -Detail $(if ($secondUi) { $secondUi.status } else { 'missing entry' })
 Assert-That "no failed patches after the second run" (@($secondRun.results | Where-Object { $_.status -eq 'failed' }).Count -eq 0) -Detail "$($secondRun.results.Count) entries"
+# Regression guard for the Windows PowerShell 5.1 '(' + if-expression trap: when
+# the managed block already exists, a parse error used to leave $newCss null and
+# WriteAllText truncated user.css to 0 bytes.
+$themeCssSecond = Get-Content -Path $themeCss -Raw -Encoding UTF8
+Assert-That "second run keeps user.css intact (no truncation)" ($themeCssSecond.Length -gt 100 -and $themeCssSecond.Contains('/* fusion:navstyle */') -and $themeCssSecond.Contains('fusion:navhide')) -Detail "$($themeCssSecond.Length) byte(s) after the second run"
 # The legacy URI injection must be absent even if an older fix.ps1 had run.
 Assert-That "no legacy 'Spicetify.URI=s' injection left" (-not ([System.IO.File]::ReadAllText($wrapperJs, [System.Text.Encoding]::UTF8)).Contains('Spicetify.URI=s')) -Detail "wrapper clean"
 
@@ -746,6 +812,19 @@ Assert-That "Enhancify asset selection filters .zip" ($enhZipFilter[0] -ge 2) -D
 # The scripts must use the per-item form; verify it against the real CLI.
 $oldStyleListCalls = Get-GitGrepLines -Pattern "'custom_apps', 'Enhancify'|'extensions', 'bookmark\.js'|config custom_apps Enhancify|config extensions bookmark" -Paths @('custom-apps.ps1', 'custom-apps.sh')
 Assert-That "custom-apps.* avoid the pre-2.45 multi-value config call" ($oldStyleListCalls.Count -eq 0) -Detail $(if ($oldStyleListCalls.Count) { $oldStyleListCalls -join '; ' } else { 'per-item calls only' })
+
+# Curated nav set: Enhancify and Statistics are still fetched by custom-apps.*
+# (so their files/patches stay available) but must NOT be enabled - only
+# lyrics-plus + Marketplace land in custom_apps.
+$customPs1Text = [System.IO.File]::ReadAllText((Join-Path $RepoRoot 'custom-apps.ps1'), [System.Text.Encoding]::UTF8)
+$customShText = [System.IO.File]::ReadAllText((Join-Path $RepoRoot 'custom-apps.sh'), [System.Text.Encoding]::UTF8)
+Assert-That "curated enable set is lyrics-plus + marketplace" ($customPs1Text.Contains("@('lyrics-plus', 'marketplace')") -and -not $customPs1Text.Contains("@('Enhancify', 'stats', 'lyrics-plus')")) -Detail "Enhancify / Stats stay disabled"
+Assert-That "curated shell enable set matches" ($customShText.Contains('for app in lyrics-plus marketplace; do') -and -not $customShText.Contains('for app in Enhancify stats lyrics-plus; do')) -Detail "same set on Linux"
+
+# Windows PowerShell 5.1 cannot parse `(if (..) {..} else {..})` as an
+# expression; the published scripts must stay runnable from `iwr | iex` on 5.1.
+$ps7OnlyExpr = Get-GitGrepLines -Pattern '= \(if \(' -Paths @('fix.ps1', 'install.ps1', 'custom-apps.ps1', 'fix-marketplace-nav.ps1')
+Assert-That "published .ps1 stay PowerShell 5.1 compatible" ($ps7OnlyExpr.Count -eq 0) -Detail $(if ($ps7OnlyExpr.Count) { $ps7OnlyExpr -join '; ' } else { 'no PS7-only (if ...) expression' })
 
 $uiConfig = Join-Path $work "ui-config"
 New-Item -ItemType Directory -Force -Path $uiConfig | Out-Null

@@ -3,10 +3,15 @@
 # Upstream: https://github.com/ZGQ-inc/spotx-spicetify-fusion (MIT)
 #
 # Notes on the curated set:
-#   - Enhancify  : latest upstream release (flat zip -> CustomApps\Enhancify)
+#   - lyrics-plus: ships inside the Spicetify CLI, so it updates with the CLI;
+#                  enabled by default (it is the lyrics nav entry)
+#   - Marketplace : installed/enabled by install.ps1; enabled here as well
+#   - Enhancify   : latest upstream release (flat zip -> CustomApps\Enhancify).
+#                  Installed but left disabled: the nav entry is hidden by the
+#                  curated visibility rules in fix.ps1/fix.sh.
 #   - Stats      : latest upstream release; the legacy resize-observer patch is
-#                  applied only when the bundle still contains the old anchor
-#   - lyrics-plus: ships inside the Spicetify CLI, so it updates with the CLI
+#                  applied only when the bundle still contains the old anchor.
+#                  Installed but left disabled, same as Enhancify.
 # The Rspack compatibility patching is delegated to the project's fix.ps1
 # instead of being duplicated here (fix.ps1 probes each patch and reports).
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -28,7 +33,7 @@ if ((New-Object Security.Principal.WindowsPrincipal($identity)).IsInRole([Securi
 }
 
 Write-Host " SpotX + Spicetify Fusion - Custom Apps & Extensions Installer" -ForegroundColor Cyan
-Write-Host " Curated: Enhancify, Stats (on-demand patch), lyrics-plus & Popular Extensions" -ForegroundColor Cyan
+Write-Host " Curated nav set: lyrics-plus + Marketplace; Enhancify / Stats stay hidden" -ForegroundColor Cyan
 Write-Host " Project: $FusionRepoUrl" -ForegroundColor Cyan
 
 $spicetifyBin = "$env:LOCALAPPDATA\spicetify"
@@ -159,10 +164,15 @@ Install-Stats
 
 Write-Host "Configuring Spicetify custom apps and extensions..." -ForegroundColor Yellow
 
+# Curated nav set: only lyrics-plus and Marketplace are enabled. Enhancify
+# and Stats are still fetched above so their files/patches stay available, but
+# they are intentionally left disabled - their nav entries are not useful in
+# practice and the compatibility hotfix also hides them (run fix.ps1 with
+# -ShowAllApps to show every entry again).
 # Spicetify >= 2.45 appends one value per call for list keys; passing several
 # values in one call (the pre-2.45 syntax) makes it treat the extra arguments as
 # config field names and error out, so only the first one would ever be added.
-foreach ($app in @('Enhancify', 'stats', 'lyrics-plus')) {
+foreach ($app in @('lyrics-plus', 'marketplace')) {
     Invoke-SpicetifyConfig @('config', 'custom_apps', $app)
 }
 foreach ($extension in @('bookmark.js', 'fullAppDisplay.js', 'keyboardShortcut.js', 'loopyLoop.js', 'popupLyrics.js', 'shuffle+.js', 'trashbin.js', 'webnowplaying.js')) {

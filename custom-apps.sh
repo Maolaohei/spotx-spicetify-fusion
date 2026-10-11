@@ -4,10 +4,15 @@
 # Upstream: https://github.com/ZGQ-inc/spotx-spicetify-fusion (MIT)
 #
 # Notes on the curated set:
-#   - Enhancify  : latest upstream release (flat zip -> CustomApps/Enhancify)
+#   - lyrics-plus: ships inside the Spicetify CLI, so it updates with the CLI;
+#                  enabled by default (it is the lyrics nav entry)
+#   - Marketplace : installed/enabled by install.sh; enabled here as well
+#   - Enhancify   : latest upstream release (flat zip -> CustomApps/Enhancify).
+#                  Installed but left disabled: the nav entry is hidden by the
+#                  curated visibility rules in fix.sh/fix.ps1.
 #   - Stats      : latest upstream release; the legacy resize-observer patch is
-#                  applied only when the bundle still contains the old anchor
-#   - lyrics-plus: ships inside the Spicetify CLI, so it updates with the CLI
+#                  applied only when the bundle still contains the old anchor.
+#                  Installed but left disabled, same as Enhancify.
 # The Rspack compatibility patching is delegated to the project's fix.sh
 # instead of being duplicated here (fix.sh probes each patch and reports).
 
@@ -31,7 +36,7 @@ if [ "$(id -u)" -eq 0 ]; then
 fi
 
 echo -e "${CYAN} SpotX + Spicetify Fusion - Custom Apps & Extensions Installer${NC}"
-echo -e "${CYAN} Curated: Enhancify, Stats (on-demand patch), lyrics-plus & Extensions${NC}"
+echo -e "${CYAN} Curated nav set: lyrics-plus + Marketplace; Enhancify / Stats stay hidden${NC}"
 echo -e "${CYAN} Project: ${FUSION_REPO_URL}${NC}"
 
 export PATH="$HOME/.spicetify:$PATH"
@@ -112,10 +117,15 @@ run_spicetify() {
         echo -e "${YELLOW}  [!] spicetify $* failed${NC}" >&2
     fi
 }
+# Curated nav set: only lyrics-plus and Marketplace are enabled. Enhancify
+# and Stats are still fetched above so their files/patches stay available, but
+# they are intentionally left disabled - their nav entries are not useful in
+# practice and the compatibility hotfix also hides them (run fix.sh with
+# SHOW_ALL_APPS=1 to show every entry again).
 # Spicetify >= 2.45 appends one value per call for list keys; passing several
 # values in one call (the pre-2.45 syntax) makes it treat the extra arguments as
 # config field names and error out, so only the first one would ever be added.
-for app in Enhancify stats lyrics-plus; do
+for app in lyrics-plus marketplace; do
     run_spicetify config custom_apps "$app"
 done
 for extension in bookmark.js fullAppDisplay.js keyboardShortcut.js loopyLoop.js popupLyrics.js shuffle+.js trashbin.js webnowplaying.js; do

@@ -467,6 +467,16 @@ for xpui_dir in target_dirs:
             add_result("C2: URI self-start", "failed",
                        "wrapper anchor not found; URI may stay undefined for extensions")
 
+        nav_anchor = "Spicetify._renderNavLinks=(e,t)=>{"
+        if "/*fusion:navlinks*/" in wcontent:
+            add_result("C3: nav render guard", "not-needed", "already guarded")
+        elif nav_anchor in wcontent and "Spicetify.React.useReducer" in wcontent:
+            wcontent = wcontent.replace(nav_anchor, nav_anchor + "if(!Spicetify.React||!Spicetify.React.useReducer)return null;/*fusion:navlinks*/", 1)
+            wpatched = True
+            add_result("C3: nav render guard", "applied", "no crash before Spicetify.React is bound")
+        else:
+            add_result("C3: nav render guard", "failed", "_renderNavLinks anchor not found")
+
         if wpatched:
             with open(wrapper_js, "w", encoding="utf-8") as f:
                 f.write(wcontent)
@@ -537,9 +547,13 @@ else:
             "name": "D2: app top-bar container",
             "marker": "/*fusion:topbar*/",
             "old": 'document.querySelector(".main-topBar-topbarContentWrapper")',
+            "old2": ('(document.querySelector(".main-topBar-topbarContentWrapper")'
+                     ' || document.querySelector("#global-nav-bar .custom-navlinks-scrollable_container")'
+                     ' || document.querySelector("#global-nav-bar") || document.body)/*fusion:topbar*/'),
             "new": ('(document.querySelector(".main-topBar-topbarContentWrapper")'
-                    ' || document.querySelector("#global-nav-bar .custom-navlinks-scrollable_container")'
-                    ' || document.querySelector("#global-nav-bar") || document.body)/*fusion:topbar*/'),
+                    ' || document.querySelector(".main-view-container__scroll-node")'
+                    ' || document.querySelector(".main-view-container")'
+                    ' || document.querySelector("#main") || document.body)/*fusion:topbar*/'),
         },
         "viewportChain": {
             "name": "D2: lyrics-plus main-view selectors",
@@ -623,9 +637,12 @@ else:
         d2_changed = False
         for key in keys:
             patch = d2_patches[key]
-            if patch["marker"] in d2_text or patch["old"] not in d2_text:
+            if patch["marker"] in d2_text:
                 continue
-            d2_text = d2_text.replace(patch["old"], patch["new"])
+            old_text = patch["old"] if patch["old"] in d2_text else patch.get("old2")
+            if not old_text or old_text not in d2_text:
+                continue
+            d2_text = d2_text.replace(old_text, patch["new"])
             d2_counts[key] += 1
             d2_changed = True
         if d2_changed:
@@ -640,6 +657,120 @@ else:
             add_result(patch["name"], "not-needed", "no unpatched occurrence found")
         else:
             add_result(patch["name"], "skipped", "no Spicetify CustomApps directory found")
+
+
+# H: styling for the extra-app entries + unified Spotify-style icons. Written to
+# the active theme's user.css (survives `spicetify apply`) and the deployed
+# user.css; the managed block owns the tail of those files.
+if os.environ.get("SKIP_NAV_STYLE"):
+    add_result("H: nav styling", "skipped", "disabled with SKIP_NAV_STYLE=1")
+else:
+    NAV_CSS = """/* fusion:navstyle */
+/* Unify the extra-app entries Spicetify adds to the global nav bar so they read
+   as one set with Spotify's own icons (48x48, border-radius 9999px, 24px glyph,
+   #b3b3b3, hover/press #242424/#000000, 8px rhythm). Managed block. */
+#global-nav-bar .custom-navlinks-scrollable_container { display: flex; align-items: center; align-self: center; min-width: 0; }
+#global-nav-bar .custom-navlinks-scrollable_container > .spicetify-sc-contentArea { display: flex; align-items: center; min-width: 0; }
+#global-nav-bar .custom-navlink {
+  --encore-icon-width: 24px; --encore-icon-height: 24px; --encore-graphic-size-decorative-base: 24px;
+  display: inline-flex !important; align-items: center !important; justify-content: center !important;
+  width: 48px !important; height: 48px !important; min-width: 48px !important; padding: 0 !important;
+  margin: 0 4px !important; border: 0 !important; border-radius: 9999px !important;
+  background-color: transparent; color: var(--text-subdued, #b3b3b3); flex: 0 0 auto; overflow: hidden;
+  transition: color .15s ease, background-color .15s ease;
+}
+#global-nav-bar .custom-navlink:hover { color: var(--text-base, #ffffff); background-color: var(--background-highlight, #242424); }
+#global-nav-bar .custom-navlink:active { background-color: var(--background-press, #000000); }
+#global-nav-bar .custom-navlink:focus-visible { outline: 2px solid var(--text-base, #ffffff); outline-offset: 2px; }
+#global-nav-bar .custom-navlink[aria-current="page"], #global-nav-bar .custom-navlink.link-subtle.active { color: var(--text-base, #ffffff); background-color: var(--background-highlight, #242424); }
+#global-nav-bar .custom-navlink .e-10860-button__icon-wrapper { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; }
+#global-nav-bar .custom-navlink .e-10860-button__icon-wrapper > svg { display: block; width: 24px; height: 24px; max-width: 100%; max-height: 100%; }
+#global-nav-bar .custom-navlink .e-10860-button__icon-wrapper > svg > svg { display: block; width: 100%; height: 100%; padding: 2px; box-sizing: border-box; }
+#global-nav-bar .custom-navlink svg, #global-nav-bar .custom-navlink svg * { fill: currentColor; stroke: none; }
+@media (max-width: 1100px) {
+  #global-nav-bar .custom-navlink { --encore-icon-width: 20px; --encore-icon-height: 20px; --encore-graphic-size-decorative-base: 20px; width: 40px !important; height: 40px !important; min-width: 40px !important; }
+  #global-nav-bar .custom-navlink .e-10860-button__icon-wrapper, #global-nav-bar .custom-navlink .e-10860-button__icon-wrapper > svg { width: 20px; height: 20px; }
+}
+"""
+    if not os.environ.get("SHOW_ALL_APPS"):
+        NAV_CSS += """/* fusion:navhide */
+/* Curated nav visibility: Enhancify / Statistics are hidden by request. Set
+   SHOW_ALL_APPS=1 to keep every custom-app entry visible. */
+#global-nav-bar .custom-navlink[aria-label="Enhancify"],
+#global-nav-bar .custom-navlink[aria-label="Statistics"],
+.main-yourLibraryX-navItem:has(.main-yourLibraryX-navLink[aria-label="Enhancify"]),
+.main-yourLibraryX-navItem:has(.main-yourLibraryX-navLink[aria-label="Statistics"]) {
+  display: none !important;
+}
+"""
+    NAV_ICON_ATTR = 'viewBox="0 0 16 16" width="24" height="24" fill="currentColor" data-fusion-navicon="1"'
+    NAV_ICONS = {
+        "marketplace": '<svg role="img" aria-hidden="true" ' + NAV_ICON_ATTR + '><path d="M9 1v6h6V1H9zm5 5h-4V2h4v4zM.999 7h6V1h-6v6zM2 2h4v4H2V2zm7 13h6V9H9v6zm1-5h4v4h-4v-4zM.999 15h6V9h-6v6zM2 10h4v4H2v-4z"/></svg>',
+        "stats": '<svg role="img" aria-hidden="true" ' + NAV_ICON_ATTR + '><path d="M.999 15h2V5h-2v10zm4 0h2V1h-2v14zM9 15h2v-4H9v4zm4-7v7h2V8h-2z"/></svg>',
+        "lyrics-plus": '<svg role="img" aria-hidden="true" ' + NAV_ICON_ATTR + '><path d="M8.5 1A4.505 4.505 0 004 5.5c0 .731.191 1.411.502 2.022L1.99 13.163a1.307 1.307 0 00.541 1.666l.605.349a1.307 1.307 0 001.649-.283L9.009 9.95C11.248 9.692 13 7.807 13 5.5 13 3.019 10.981 1 8.5 1zM4.023 14.245a.307.307 0 01-.388.066l-.605-.349a.309.309 0 01-.128-.393l2.26-5.078A4.476 4.476 0 007.715 9.92l-3.692 4.325zM8.5 9C6.57 9 5 7.43 5 5.5S6.57 2 8.5 2 12 3.57 12 5.5 10.429 9 8.5 9z"/></svg>',
+        "Enhancify": '<svg role="img" aria-hidden="true" ' + NAV_ICON_ATTR + '><path d="M11.777.972c-.364 1.054-1.195 2.322-2.798 2.83-.115.036-.115.36 0 .396 1.603.508 2.434 1.775 2.798 2.83.04.114.406.114.446 0 .364-1.055 1.195-2.322 2.798-2.83.115-.036.115-.36 0-.396-1.603-.508-2.434-1.776-2.798-2.83-.04-.114-.406-.114-.446 0zM5.295 4.5a.75.75 0 01.747.682c.06.65.334 1.68.954 2.572.606.87 1.527 1.596 2.927 1.75a.75.75 0 010 1.491c-1.4.154-2.321.88-2.927 1.751a5.683 5.683 0 00-.954 2.572.75.75 0 01-1.493 0 5.683 5.683 0 00-.954-2.572c-.606-.87-1.527-1.597-2.927-1.75a.75.75 0 010-1.492c1.4-.154 2.321-.88 2.927-1.75.62-.892.894-1.922.954-2.572a.75.75 0 01.746-.682z"/></svg>',
+    }
+    css_targets = []
+    theme_dir = os.environ.get("SPICETIFY_THEME_DIR", "")
+    if not theme_dir:
+        cfg = os.path.join(os.path.expanduser("~/.config"), "spicetify", "config-xpui.ini")
+        theme = "marketplace"
+        if os.path.isfile(cfg):
+            m = re.search(r"(?m)^current_theme\\s*=\\s*(\\S+)", io.open(cfg, encoding="utf-8-sig").read())
+            if m:
+                theme = m.group(1)
+        theme_dir = os.path.join(os.path.expanduser("~/.config"), "spicetify", "Themes", theme)
+    css_targets.append(os.path.join(theme_dir, "user.css"))
+    for d in target_dirs:
+        css_targets.append(os.path.join(d, "user.css"))
+    style_done = 0
+    for css_path in css_targets:
+        try:
+            os.makedirs(os.path.dirname(css_path), exist_ok=True)
+        except OSError:
+            continue
+        text = io.open(css_path, encoding="utf-8").read() if os.path.isfile(css_path) else ""
+        head = text.split("/* fusion:navstyle */")[0].rstrip("\\n")
+        new_css = (head + "\\n" if head else "") + NAV_CSS
+        if new_css != text:
+            io.open(css_path, "w", encoding="utf-8", newline="").write(new_css)
+            style_done += 1
+    if style_done:
+        add_result("H: nav styling", "applied", "%d user.css file(s) written" % style_done)
+    else:
+        add_result("H: nav styling", "not-needed", "managed block already current")
+
+    if os.environ.get("SHOW_ALL_APPS"):
+        add_result("H: nav visibility", "skipped", "disabled with SHOW_ALL_APPS=1 - every custom-app entry stays visible")
+    elif style_done:
+        add_result("H: nav visibility", "applied", "curated set: Enhancify / Statistics entries hidden")
+    else:
+        add_result("H: nav visibility", "not-needed", "curated set already in effect")
+
+    icon_done = 0
+    for app, icon in NAV_ICONS.items():
+        for json_path in (
+            os.path.join(user_apps, app, "manifest.json"),
+            os.path.join(cli_apps, app, "manifest.json"),
+        ) + tuple(os.path.join(d, "spicetify-routes-%s.json" % app) for d in target_dirs):
+            if not os.path.isfile(json_path):
+                continue
+            try:
+                data = json.loads(io.open(json_path, encoding="utf-8-sig").read())
+            except Exception:
+                continue
+            if data.get("icon") == icon and data.get("active-icon") == icon:
+                continue
+            data["icon"] = icon
+            if "active-icon" in data:
+                data["active-icon"] = icon
+            io.open(json_path, "w", encoding="utf-8", newline="").write(json.dumps(data, ensure_ascii=False, indent=1))
+            icon_done += 1
+    if icon_done:
+        add_result("H: nav icons", "applied", "%d manifest/route file(s) switched to Spotify-style glyphs" % icon_done)
+    else:
+        add_result("H: nav icons", "not-needed", "all app icons already unified")
+
 
 report_path = os.environ.get("REPORT_PATH", "")
 if report_path:
