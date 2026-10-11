@@ -467,15 +467,69 @@ for xpui_dir in target_dirs:
             add_result("C2: URI self-start", "failed",
                        "wrapper anchor not found; URI may stay undefined for extensions")
 
+        # C3: the client renders its nav bar before the wrapper has bound
+        #   Spicetify.React / populated Spicetify.ReactComponent. The guard binds
+        #   Spicetify.React on demand from the loaded module map, arms a bounded
+        #   re-render retry and keeps the native hook call unconditional (a
+        #   conditional hook is a React hook-order violation = fatal dialog).
         nav_anchor = "Spicetify._renderNavLinks=(e,t)=>{"
-        if "/*fusion:navlinks*/" in wcontent:
-            add_result("C3: nav render guard", "not-needed", "already guarded")
-        elif nav_anchor in wcontent and "Spicetify.React.useReducer" in wcontent:
-            wcontent = wcontent.replace(nav_anchor, nav_anchor + "if(!Spicetify.React||!Spicetify.React.useReducer)return null;/*fusion:navlinks*/", 1)
+        nav_guard_old = "Spicetify._renderNavLinks=(e,t)=>{if(!Spicetify.React||!Spicetify.React.useReducer)return null;/*fusion:navlinks*/"
+        nav_guard_new = (
+            "Spicetify._fusionBindReact=function(){/*fusion:reactbind*/try{if(Spicetify.React&&Spicetify.React.useReducer)return true;"
+            "var g=window.rspackChunk||window.rspackChunkclient_web||window.webpackChunkclient_web;"
+            'if(!g||typeof g.push!="function"||g.push===Array.prototype.push)return false;'
+            "var n=Spicetify.__fusionRequire;"
+            'if(!n){n=g.push([[Symbol()],{},function(m){return m}]);if(typeof n!="function")return false;Spicetify.__fusionRequire=n;}'
+            "if(!n.m)return false;var f=null;for(var k in n.m){"
+            "if(!Object.prototype.hasOwnProperty.call(n.m,k))continue;var ex=null;"
+            "try{ex=n(k)}catch(_){continue}if(ex&&ex.useMemo){f=ex;break}}"
+            "if(f){Spicetify.React=f;return true}}catch(_){}"
+            "return !!(Spicetify.React&&Spicetify.React.useReducer);};\n"
+            "Spicetify._fusionNavReady=function(){/*fusion:navretry*/var R=Spicetify.ReactComponent||{},P=Spicetify.Platform||{};"
+            "return !!(R.ButtonTertiary&&R.Navigation&&R.TooltipWrapper&&R.ScrollableContainer&&P.History&&P.LocalStorageAPI);};\n"
+            "Spicetify._fusionNavCheck=function(){if(Spicetify.__fusionNavTimer)return;var n=0;"
+            "Spicetify.__fusionNavTimer=setInterval(function(){if(++n>120||Spicetify._fusionNavReady()){"
+            "clearInterval(Spicetify.__fusionNavTimer);Spicetify.__fusionNavTimer=0;"
+            "if(Spicetify._fusionNavReady()){try{W&&W()}catch(_){}}}},150);};\n"
+            "Spicetify._renderNavLinks=(e,t)=>{if(!Spicetify.React||!Spicetify.React.useReducer){if(!Spicetify._fusionBindReact())return null;}"
+            "setTimeout(Spicetify._fusionNavCheck,0);/*fusion:navlinks*/"
+        )
+        if "/*fusion:reactbind*/" in wcontent:
+            add_result("C3: nav render guard", "not-needed", "already patched")
+        elif nav_guard_old in wcontent:
+            wcontent = wcontent.replace(nav_guard_old, nav_guard_new, 1)
             wpatched = True
-            add_result("C3: nav render guard", "applied", "no crash before Spicetify.React is bound")
+            add_result("C3: nav render guard", "applied", "upgraded: React is bound on demand + bounded nav retry")
+        elif nav_anchor in wcontent and "Spicetify.React.useReducer" in wcontent:
+            wcontent = wcontent.replace(nav_anchor, nav_guard_new, 1)
+            wpatched = True
+            add_result("C3: nav render guard", "applied", "React is bound on demand + bounded nav retry")
         else:
             add_result("C3: nav render guard", "failed", "_renderNavLinks anchor not found")
+
+        # C3b: one not-yet-installed module must not abort the exposure scan
+        scan_old = "Object.keys(e.m).map(u=>e(u))"
+        scan_new = "Object.keys(e.m).map(u=>{try{return e(u)}catch(x){return null}})/*fusion:scan*/"
+        if "/*fusion:scan*/" in wcontent:
+            add_result("C3b: exposure scan guard", "not-needed", "already tolerant")
+        elif scan_old in wcontent:
+            wcontent = wcontent.replace(scan_old, scan_new, 1)
+            wpatched = True
+            add_result("C3b: exposure scan guard", "applied", "tolerates a not-yet-installed module")
+        else:
+            add_result("C3b: exposure scan guard", "failed", "module scan anchor not found")
+
+        # C3c: a stuck "all chunks loaded" callback must not hang the init forever
+        wait_old = 'await M(()=>a,100),console.log("[spicetifyWrapper] All required webpack modules loaded")'
+        wait_new = 'await Promise.race([M(()=>a,100),new Promise(function(r){setTimeout(r,4000)})]),/*fusion:noblock*/console.log("[spicetifyWrapper] All required webpack modules loaded")'
+        if "/*fusion:noblock*/" in wcontent:
+            add_result("C3c: bounded init wait", "not-needed", "already bounded")
+        elif wait_old in wcontent:
+            wcontent = wcontent.replace(wait_old, wait_new, 1)
+            wpatched = True
+            add_result("C3c: bounded init wait", "applied", "stops waiting forever for the chunk callback")
+        else:
+            add_result("C3c: bounded init wait", "failed", "chunk-callback anchor not found")
 
         if wpatched:
             with open(wrapper_js, "w", encoding="utf-8") as f:
@@ -542,6 +596,43 @@ else:
 if os.environ.get("SKIP_APP_PATCHES"):
     add_result("D2: custom-app patches", "skipped", "disabled with SKIP_APP_PATCHES=1")
 else:
+    # The lyrics-plus / reddit tab bar portals into the 1.2.x top-bar container
+    # (.main-topBar-topbarContentWrapper). On 1.3.x that lookup is null and
+    # ReactDOM.createPortal(children, null) throws React error #200, so the whole
+    # view is replaced by the fatal dialog as soon as the lyrics entry is opened.
+    TAB_PORTAL_OLD = (
+        "const TabBarContext = ({ children }) => {\n"
+        "\treturn Spicetify.ReactDOM.createPortal(\n"
+        "\t\treact.createElement(\n"
+        "\t\t\t\"div\",\n"
+        "\t\t\t{\n"
+        "\t\t\t\tclassName: \"main-topBar-topbarContent\",\n"
+        "\t\t\t},\n"
+        "\t\t\tchildren\n"
+        "\t\t),\n"
+        "\t\tdocument.querySelector(\".main-topBar-topbarContentWrapper\")\n"
+        "\t);\n"
+        "};"
+    )
+    TAB_PORTAL_NEW = (
+        "const TabBarContext = ({ children }) => {\n"
+        "\tconst fusionTabHost =\n"
+        "\t\tdocument.querySelector(\".main-topBar-topbarContentWrapper\") ||\n"
+        "\t\tdocument.querySelector(\".main-view-container__scroll-node\") ||\n"
+        "\t\tdocument.querySelector(\".main-view-container\") ||\n"
+        "\t\tdocument.querySelector(\"#main\") ||\n"
+        "\t\tdocument.body;\n"
+        "\tconst fusionTabContent = react.createElement(\n"
+        "\t\t\"div\",\n"
+        "\t\t{\n"
+        "\t\t\tclassName: \"main-topBar-topbarContent\",\n"
+        "\t\t},\n"
+        "\t\tchildren\n"
+        "\t);\n"
+        "\t/*fusion:tabportal*/\n"
+        "\treturn fusionTabHost ? Spicetify.ReactDOM.createPortal(fusionTabContent, fusionTabHost) : fusionTabContent;\n"
+        "};"
+    )
     d2_patches = {
         "topbar": {
             "name": "D2: app top-bar container",
@@ -605,6 +696,12 @@ else:
             "old": "observer.observe(resizeHost);",
             "new": "if (resizeHost) observer.observe(resizeHost);",
         },
+        "tabPortal": {
+            "name": "D2: tab-bar portal host",
+            "marker": "/*fusion:tabportal*/",
+            "old": TAB_PORTAL_OLD,
+            "new": TAB_PORTAL_NEW,
+        },
     }
     xdg = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
     user_apps = os.environ.get("SPICETIFY_APPS_DIR") or os.path.join(xdg, "spicetify", "CustomApps")
@@ -616,16 +713,16 @@ else:
         (os.path.join(cli_apps, "lyrics-plus", "index.js"),
          ["topbar", "viewportChain", "viewportField", "offsetTop"]),
         (os.path.join(cli_apps, "lyrics-plus", "TabBar.js"),
-         ["resizeSel", "resizeInit", "resizeHandler", "observe"]),
+         ["resizeSel", "resizeInit", "resizeHandler", "observe", "tabPortal"]),
         (os.path.join(cli_apps, "reddit", "TabBar.js"),
-         ["resizeSel", "resizeInit", "resizeHandler", "observe"]),
+         ["resizeSel", "resizeInit", "resizeHandler", "observe", "tabPortal"]),
     ]
     for xpui_dir in target_dirs:
         d2_targets.append((os.path.join(xpui_dir, "spicetify-routes-stats.js"), ["topbar"]))
         d2_targets.append((os.path.join(xpui_dir, "spicetify-routes-marketplace.js"), ["topbar"]))
         d2_targets.append((os.path.join(xpui_dir, "spicetify-routes-lyrics-plus.js"),
                            ["topbar", "viewportChain", "viewportField", "offsetTop",
-                            "resizeSel", "resizeInit", "resizeHandler", "observe"]))
+                            "resizeSel", "resizeInit", "resizeHandler", "observe", "tabPortal"]))
 
     d2_counts = {key: 0 for key in d2_patches}
     d2_touched = 0

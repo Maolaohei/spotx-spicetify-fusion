@@ -381,6 +381,23 @@ const [windowSize, setWindowSize] = useState(resizeHost.clientWidth);
 const resizeHandler = () => setWindowSize(resizeHost.clientWidth);
 observer.observe(resizeHost);
 '@
+# The real tab bar portals into the 1.2.x top-bar container; reproduce that
+# exactly (tabs included) so the tabPortal patch has something to match.
+$d2Tab = [char]9
+$d2TabBar += (@(
+        'const TabBarContext = ({ children }) => {'
+        ($d2Tab + 'return Spicetify.ReactDOM.createPortal(')
+        ($d2Tab + $d2Tab + 'react.createElement(')
+        ($d2Tab + $d2Tab + $d2Tab + '"div",')
+        ($d2Tab + $d2Tab + $d2Tab + '{')
+        ($d2Tab + $d2Tab + $d2Tab + $d2Tab + 'className: "main-topBar-topbarContent",')
+        ($d2Tab + $d2Tab + $d2Tab + '},')
+        ($d2Tab + $d2Tab + $d2Tab + 'children')
+        ($d2Tab + $d2Tab + '),')
+        ($d2Tab + $d2Tab + 'document.querySelector(".main-topBar-topbarContentWrapper")')
+        ($d2Tab + ');')
+        '};'
+    ) -join "`n") + "`n"
 Set-Content -Path (Join-Path $d2Cli "lyrics-plus\TabBar.js") -Value $d2TabBar -Encoding ascii
 Set-Content -Path (Join-Path $d2Cli "reddit\TabBar.js") -Value $d2TabBar -Encoding ascii
 
@@ -442,7 +459,8 @@ $d2Expected = @(
     'D2: app resize-host selector',
     'D2: app resize-host null guard',
     'D2: app resize-handler null guard',
-    'D2: app ResizeObserver guard'
+    'D2: app ResizeObserver guard',
+    'D2: tab-bar portal host'
 )
 foreach ($name in $d2Expected) {
     $entry = $report.results | Where-Object { $_.Patch -eq $name } | Select-Object -First 1
@@ -497,6 +515,23 @@ $wrapperDeployed = [System.IO.File]::ReadAllText((Join-Path $appsDir "helper\spi
 $wrapperTemplate = [System.IO.File]::ReadAllText((Join-Path $spicetifyDir "jsHelper\spicetifyWrapper.js"), [System.Text.Encoding]::UTF8)
 Assert-That "deployed wrapper guards _renderNavLinks" ($wrapperDeployed.Contains('/*fusion:navlinks*/')) -Detail "returns early until React is bound"
 Assert-That "CLI template guards _renderNavLinks" ($wrapperTemplate.Contains('/*fusion:navlinks*/')) -Detail "survives spicetify apply"
+# C3 race fix: bind React on demand, keep the hook unconditional, survive an
+# init that never sees the chunk callback and a not-yet-installed module.
+Assert-That "deployed wrapper binds Spicetify.React on demand" ($wrapperDeployed.Contains('/*fusion:reactbind*/') -and $wrapperDeployed.Contains('if(!Spicetify._fusionBindReact())return null;')) -Detail "first render can call the hook"
+Assert-That "CLI template binds Spicetify.React on demand" ($wrapperTemplate.Contains('/*fusion:reactbind*/')) -Detail "survives spicetify apply"
+Assert-That "wrapper arms the bounded nav retry" ($wrapperDeployed.Contains('/*fusion:navretry*/') -and $wrapperTemplate.Contains('/*fusion:navretry*/')) -Detail "re-renders once ReactComponent is ready"
+Assert-That "exposure scan tolerates a missing module" ($wrapperDeployed.Contains('/*fusion:scan*/') -and $wrapperTemplate.Contains('/*fusion:scan*/')) -Detail "one bad module cannot abort the exposure"
+Assert-That "init wait is bounded" ($wrapperDeployed.Contains('/*fusion:noblock*/') -and $wrapperTemplate.Contains('/*fusion:noblock*/')) -Detail "a stuck chunk callback cannot hang the init"
+foreach ($c3Name in @('C3: nav render guard', 'C3b: exposure scan guard', 'C3c: bounded init wait')) {
+    $c3Entry = $report.results | Where-Object { $_.Patch -eq $c3Name } | Select-Object -First 1
+    Assert-That "$c3Name applied in the sandbox" ($c3Entry -and $c3Entry.status -eq 'applied') -Detail $(if ($c3Entry) { $c3Entry.status } else { 'missing entry' })
+}
+
+# D2 tabPortal: the lyrics-plus tab bar must never portal into a null host
+# (React error #200 replaced the whole view with the fatal dialog).
+$tabBarFixture = [System.IO.File]::ReadAllText((Join-Path $d2Cli "lyrics-plus\TabBar.js"), [System.Text.Encoding]::UTF8)
+Assert-That "tab bar portal host is patched" ($tabBarFixture.Contains('/*fusion:tabportal*/') -and $tabBarFixture.Contains('fusionTabHost ? Spicetify.ReactDOM.createPortal(fusionTabContent, fusionTabHost)')) -Detail "never portals into null"
+Assert-That "tab bar keeps the legacy top-bar lookup first" ($tabBarFixture.Contains('const fusionTabHost =') -and $tabBarFixture.Contains('document.querySelector(".main-topBar-topbarContentWrapper") ||')) -Detail "1.2.x behaviour preserved"
 
 # D2 overlap regression guard: app tab bars must never be portaled into the nav
 # container (that made the container taller and pushed the icons off the row).

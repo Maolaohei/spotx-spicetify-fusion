@@ -441,6 +441,12 @@ $c2Unknown = 0
 $c3Applied = 0
 $c3Clean = 0
 $c3Unknown = 0
+$c3ScanApplied = 0
+$c3ScanClean = 0
+$c3ScanUnknown = 0
+$c3WaitApplied = 0
+$c3WaitClean = 0
+$c3WaitUnknown = 0
 
 foreach ($wrapperPath in ($WrapperFiles | Select-Object -Unique)) {
     Write-Log "[*] Inspecting $wrapperPath..." "Cyan"
@@ -499,22 +505,71 @@ foreach ($wrapperPath in ($WrapperFiles | Select-Object -Unique)) {
     }
 
     # C3: the client renders its nav bar before the wrapper has bound
-    # Spicetify.React, and _renderNavLinks() reads Spicetify.React.useReducer
-    # unconditionally - the throw lands in Spotify's error boundary and the whole
-    # UI is replaced by the fatal dialog on startup. Return early instead; the
-    # wrapper calls refreshNavLinks() once the modules are ready, which renders
-    # the links properly.
+    #   Spicetify.React / populated Spicetify.ReactComponent, and
+    #   _renderNavLinks() reads Spicetify.React.useReducer unconditionally. The
+    #   old wrapper threw into Spotify's error boundary (fatal dialog); the
+    #   previous guard returned null instead, but then the useReducer dispatch
+    #   (W) was never stored, so the links never mounted - and the first render
+    #   without the hook followed by a later render with it is a hook-order
+    #   violation (also a fatal dialog). The guard now (a) binds Spicetify.React
+    #   on demand from the already-loaded module map, (b) arms a bounded
+    #   re-render retry, and (c) keeps the native hook call unconditional.
     $navLinkAnchor = 'Spicetify._renderNavLinks=(e,t)=>{'
-    if ($wrapContent.Contains('/*fusion:navlinks*/')) {
+    $navGuardOld = 'Spicetify._renderNavLinks=(e,t)=>{if(!Spicetify.React||!Spicetify.React.useReducer)return null;/*fusion:navlinks*/'
+    $navGuardNew = (@'
+Spicetify._fusionBindReact=function(){/*fusion:reactbind*/try{if(Spicetify.React&&Spicetify.React.useReducer)return true;var g=window.rspackChunk||window.rspackChunkclient_web||window.webpackChunkclient_web;if(!g||typeof g.push!=="function"||g.push===Array.prototype.push)return false;var n=Spicetify.__fusionRequire;if(!n){n=g.push([[Symbol()],{},function(m){return m}]);if(typeof n!=="function")return false;Spicetify.__fusionRequire=n;}if(!n.m)return false;var f=null;for(var k in n.m){if(!Object.prototype.hasOwnProperty.call(n.m,k))continue;var ex=null;try{ex=n(k)}catch(_){continue}if(ex&&ex.useMemo){f=ex;break}}if(f){Spicetify.React=f;return true}}catch(_){}return !!(Spicetify.React&&Spicetify.React.useReducer);};
+Spicetify._fusionNavReady=function(){/*fusion:navretry*/var R=Spicetify.ReactComponent||{},P=Spicetify.Platform||{};return !!(R.ButtonTertiary&&R.Navigation&&R.TooltipWrapper&&R.ScrollableContainer&&P.History&&P.LocalStorageAPI);};
+Spicetify._fusionNavCheck=function(){if(Spicetify.__fusionNavTimer)return;var n=0;Spicetify.__fusionNavTimer=setInterval(function(){if(++n>120||Spicetify._fusionNavReady()){clearInterval(Spicetify.__fusionNavTimer);Spicetify.__fusionNavTimer=0;if(Spicetify._fusionNavReady()){try{W&&W()}catch(_){}}}},150);};
+Spicetify._renderNavLinks=(e,t)=>{if(!Spicetify.React||!Spicetify.React.useReducer){if(!Spicetify._fusionBindReact())return null;}setTimeout(Spicetify._fusionNavCheck,0);/*fusion:navlinks*/
+'@).TrimEnd()
+    if ($wrapContent.Contains('/*fusion:reactbind*/')) {
         $c3Clean++
     }
+    elseif ($wrapContent.Contains($navGuardOld)) {
+        $wrapContent = $wrapContent.Replace($navGuardOld, $navGuardNew)
+        $wrapPatched = $true
+        $c3Applied++
+    }
     elseif ($wrapContent.Contains($navLinkAnchor) -and $wrapContent.Contains('Spicetify.React.useReducer')) {
-        $wrapContent = $wrapContent.Replace($navLinkAnchor, 'Spicetify._renderNavLinks=(e,t)=>{if(!Spicetify.React||!Spicetify.React.useReducer)return null;/*fusion:navlinks*/')
+        $wrapContent = $wrapContent.Replace($navLinkAnchor, $navGuardNew)
         $wrapPatched = $true
         $c3Applied++
     }
     else {
         $c3Unknown++
+    }
+
+    # C3b: one not-yet-installed module must not abort the whole exposure scan
+    #   ("Cannot read properties of undefined (reading 'call')" left
+    #   Spicetify.ReactComponent at a single key, so the nav never mounted).
+    $scanOld = 'Object.keys(e.m).map(u=>e(u))'
+    $scanNew = 'Object.keys(e.m).map(u=>{try{return e(u)}catch(x){return null}})/*fusion:scan*/'
+    if ($wrapContent.Contains('/*fusion:scan*/')) {
+        $c3ScanClean++
+    }
+    elseif ($wrapContent.Contains($scanOld)) {
+        $wrapContent = $wrapContent.Replace($scanOld, $scanNew)
+        $wrapPatched = $true
+        $c3ScanApplied++
+    }
+    else {
+        $c3ScanUnknown++
+    }
+
+    # C3c: a stuck "all chunks loaded" callback must not hang the init forever
+    #   (no ReactComponent exposure -> no nav entries in that session).
+    $waitOld = 'await M(()=>a,100),console.log("[spicetifyWrapper] All required webpack modules loaded")'
+    $waitNew = 'await Promise.race([M(()=>a,100),new Promise(function(r){setTimeout(r,4000)})]),/*fusion:noblock*/console.log("[spicetifyWrapper] All required webpack modules loaded")'
+    if ($wrapContent.Contains('/*fusion:noblock*/')) {
+        $c3WaitClean++
+    }
+    elseif ($wrapContent.Contains($waitOld)) {
+        $wrapContent = $wrapContent.Replace($waitOld, $waitNew)
+        $wrapPatched = $true
+        $c3WaitApplied++
+    }
+    else {
+        $c3WaitUnknown++
     }
 
     if ($wrapPatched) {
@@ -547,13 +602,33 @@ else {
 }
 
 if ($c3Applied -gt 0) {
-    Add-Result -Patch "C3: nav render guard" -Status applied -Detail "$c3Applied wrapper(s) no longer crash before Spicetify.React is bound"
+    Add-Result -Patch "C3: nav render guard" -Status applied -Detail "$c3Applied wrapper(s) bind Spicetify.React on demand + bounded nav retry"
 }
 elseif ($c3Clean -gt 0) {
-    Add-Result -Patch "C3: nav render guard" -Status not-needed -Detail "$c3Clean wrapper(s) already guarded"
+    Add-Result -Patch "C3: nav render guard" -Status not-needed -Detail "$c3Clean wrapper(s) already patched"
 }
 else {
     Add-Result -Patch "C3: nav render guard" -Status failed -Detail "_renderNavLinks anchor not found"
+}
+
+if ($c3ScanApplied -gt 0) {
+    Add-Result -Patch "C3b: exposure scan guard" -Status applied -Detail "$c3ScanApplied wrapper(s) tolerate a not-yet-installed module"
+}
+elseif ($c3ScanClean -gt 0) {
+    Add-Result -Patch "C3b: exposure scan guard" -Status not-needed -Detail "$c3ScanClean wrapper(s) already tolerant"
+}
+else {
+    Add-Result -Patch "C3b: exposure scan guard" -Status failed -Detail "module scan anchor not found"
+}
+
+if ($c3WaitApplied -gt 0) {
+    Add-Result -Patch "C3c: bounded init wait" -Status applied -Detail "$c3WaitApplied wrapper(s) stop waiting forever for the chunk callback"
+}
+elseif ($c3WaitClean -gt 0) {
+    Add-Result -Patch "C3c: bounded init wait" -Status not-needed -Detail "$c3WaitClean wrapper(s) already bounded"
+}
+else {
+    Add-Result -Patch "C3c: bounded init wait" -Status failed -Detail "chunk-callback anchor not found"
 }
 
 # SECTION D: Fix custom apps push headers in spicetify-routes-*.js
@@ -601,6 +676,47 @@ $cliAppsDir = if ($SpicetifyCliAppsDir) { $SpicetifyCliAppsDir } else { Join-Pat
 #   Reload page" dialog - reproducible by switching between the extra apps in
 #   the left sidebar. Every patch below keeps the legacy selector first (1.2.x
 #   behaviour is untouched) and appends the 1.3.x fallback / null guard.
+# The lyrics-plus / reddit tab bar portals into the 1.2.x top-bar container
+#   (.main-topBar-topbarContentWrapper). On 1.3.x that lookup is null and
+#   ReactDOM.createPortal(children, null) throws React error #200, so the whole
+#   view is replaced by the fatal dialog as soon as the lyrics entry is opened.
+#   Keep the legacy lookup first, fall back to the page content and never portal
+#   into a null host.
+$tab = [char]9
+$tabPortalOld = (@(
+        'const TabBarContext = ({ children }) => {'
+        ($tab + 'return Spicetify.ReactDOM.createPortal(')
+        ($tab + $tab + 'react.createElement(')
+        ($tab + $tab + $tab + '"div",')
+        ($tab + $tab + $tab + '{')
+        ($tab + $tab + $tab + $tab + 'className: "main-topBar-topbarContent",')
+        ($tab + $tab + $tab + '},')
+        ($tab + $tab + $tab + 'children')
+        ($tab + $tab + '),')
+        ($tab + $tab + 'document.querySelector(".main-topBar-topbarContentWrapper")')
+        ($tab + ');')
+        '};'
+    ) -join "`n")
+$tabPortalNew = (@(
+        'const TabBarContext = ({ children }) => {'
+        ($tab + 'const fusionTabHost =')
+        ($tab + $tab + 'document.querySelector(".main-topBar-topbarContentWrapper") ||')
+        ($tab + $tab + 'document.querySelector(".main-view-container__scroll-node") ||')
+        ($tab + $tab + 'document.querySelector(".main-view-container") ||')
+        ($tab + $tab + 'document.querySelector("#main") ||')
+        ($tab + $tab + 'document.body;')
+        ($tab + 'const fusionTabContent = react.createElement(')
+        ($tab + $tab + '"div",')
+        ($tab + $tab + '{')
+        ($tab + $tab + $tab + 'className: "main-topBar-topbarContent",')
+        ($tab + $tab + '},')
+        ($tab + $tab + 'children')
+        ($tab + ');')
+        ($tab + '/*fusion:tabportal*/')
+        ($tab + 'return fusionTabHost ? Spicetify.ReactDOM.createPortal(fusionTabContent, fusionTabHost) : fusionTabContent;')
+        '};'
+    ) -join "`n")
+
 $appPatchSet = @{
     'topbar' = @{
         Name   = 'D2: app top-bar container'
@@ -651,17 +767,23 @@ $appPatchSet = @{
         Old    = 'observer.observe(resizeHost);'
         New    = 'if (resizeHost) observer.observe(resizeHost);'
     }
+    'tabPortal' = @{
+        Name   = 'D2: tab-bar portal host'
+        Marker = '/*fusion:tabportal*/'
+        Old    = $tabPortalOld
+        New    = $tabPortalNew
+    }
 }
 
 $appTargets = @(
     @{ Path = (Join-Path $userAppsDir 'stats\index.js'); Patches = @('topbar') },
     @{ Path = (Join-Path $userAppsDir 'marketplace\index.js'); Patches = @('topbar') },
     @{ Path = (Join-Path $cliAppsDir 'lyrics-plus\index.js'); Patches = @('topbar', 'viewportChain', 'viewportField', 'offsetTop') },
-    @{ Path = (Join-Path $cliAppsDir 'lyrics-plus\TabBar.js'); Patches = @('resizeSel', 'resizeInit', 'resizeHandler', 'observe') },
-    @{ Path = (Join-Path $cliAppsDir 'reddit\TabBar.js'); Patches = @('resizeSel', 'resizeInit', 'resizeHandler', 'observe') },
+    @{ Path = (Join-Path $cliAppsDir 'lyrics-plus\TabBar.js'); Patches = @('resizeSel', 'resizeInit', 'resizeHandler', 'observe', 'tabPortal') },
+    @{ Path = (Join-Path $cliAppsDir 'reddit\TabBar.js'); Patches = @('resizeSel', 'resizeInit', 'resizeHandler', 'observe', 'tabPortal') },
     @{ Path = (Join-Path $SpotifyAppsDir 'spicetify-routes-stats.js'); Patches = @('topbar') },
     @{ Path = (Join-Path $SpotifyAppsDir 'spicetify-routes-marketplace.js'); Patches = @('topbar') },
-    @{ Path = (Join-Path $SpotifyAppsDir 'spicetify-routes-lyrics-plus.js'); Patches = @('topbar', 'viewportChain', 'viewportField', 'offsetTop', 'resizeSel', 'resizeInit', 'resizeHandler', 'observe') }
+    @{ Path = (Join-Path $SpotifyAppsDir 'spicetify-routes-lyrics-plus.js'); Patches = @('topbar', 'viewportChain', 'viewportField', 'offsetTop', 'resizeSel', 'resizeInit', 'resizeHandler', 'observe', 'tabPortal') }
 )
 
 $appPatchStats = @{}
