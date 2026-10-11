@@ -531,6 +531,52 @@ for xpui_dir in target_dirs:
         else:
             add_result("C3c: bounded init wait", "failed", "chunk-callback anchor not found")
 
+        # C4: showNotification shim. The upstream compat loop only bridges to
+        #   Snackbar.enqueueSnackbar, which does not exist on Spotify 1.3.4 (the
+        #   build exposes Snackbar.enqueueCustomSnackbar instead), so
+        #   Spicetify.showNotification stayed undefined and any extension calling
+        #   it threw into the error boundary. The upstream branch is untouched;
+        #   this shim only guarantees the method exists: prefer whatever the
+        #   upstream branch assigned, then bridge to enqueueCustomSnackbar, and
+        #   silently no-op on any failure.
+        notify_anchor = 'isError=h==="error",Spicetify.showNotification(l,isError,y)}})()'
+        notify_shim = (
+            ',(function(){/*fusion:notify*/var real=null;function fusionShowNotification(message,isError,duration){'
+            'try{if(typeof real==="function")return real(message,isError,duration);'
+            'var S=Spicetify.Snackbar||{};var f=S.enqueueCustomSnackbar;if(typeof f!=="function")return void 0;'
+            'if(message===null||message===undefined)return void 0;'
+            'var opts={keyPrefix:"fusion-notify"};if(typeof duration==="number")opts.autoHideDuration=duration;'
+            'return f.call(S,message,opts)}catch(_){return void 0}}'
+            'try{var cur=Spicetify.showNotification;if(typeof cur==="function")real=cur;'
+            'Object.defineProperty(Spicetify,"showNotification",{configurable:true,enumerable:true,'
+            'get:function(){return typeof real==="function"?real:fusionShowNotification},'
+            'set:function(v){real=typeof v==="function"?v:null}})}'
+            'catch(_){try{if(typeof Spicetify.showNotification!=="function")Spicetify.showNotification=fusionShowNotification}catch(__){}}'
+            '})()'
+        )
+        # Normalise an earlier C4 revision in place (identifier -> keyPrefix, and
+        # add the empty-message guard) so re-running the hotfix upgrades instead
+        # of stacking a second shim.
+        notify_current = ('if(typeof f!=="function")return void 0;if(message===null||message===undefined)return void 0;'
+                          'var opts={keyPrefix:"fusion-notify"}')
+        if notify_current in wcontent:
+            add_result("C4: showNotification shim", "not-needed", "already shimmed")
+        elif "/*fusion:notify*/" in wcontent:
+            notify_before = wcontent
+            wcontent = wcontent.replace('var opts={identifier:"fusion-showNotification"}', 'var opts={keyPrefix:"fusion-notify"}')
+            wcontent = wcontent.replace('if(typeof f!=="function")return void 0;var opts={keyPrefix:"fusion-notify"}', notify_current)
+            if wcontent != notify_before:
+                wpatched = True
+                add_result("C4: showNotification shim", "applied", "upgraded to the keyPrefix bridge")
+            else:
+                add_result("C4: showNotification shim", "failed", "shim present but not recognised")
+        elif notify_anchor in wcontent:
+            wcontent = wcontent.replace(notify_anchor, notify_anchor + notify_shim, 1)
+            wpatched = True
+            add_result("C4: showNotification shim", "applied", "bridges to Snackbar.enqueueCustomSnackbar with a no-op fallback")
+        else:
+            add_result("C4: showNotification shim", "failed", "snackbar compat anchor not found")
+
         if wpatched:
             with open(wrapper_js, "w", encoding="utf-8") as f:
                 f.write(wcontent)

@@ -447,6 +447,9 @@ $c3ScanUnknown = 0
 $c3WaitApplied = 0
 $c3WaitClean = 0
 $c3WaitUnknown = 0
+$c4Applied = 0
+$c4Clean = 0
+$c4Unknown = 0
 
 foreach ($wrapperPath in ($WrapperFiles | Select-Object -Unique)) {
     Write-Log "[*] Inspecting $wrapperPath..." "Cyan"
@@ -572,6 +575,46 @@ Spicetify._renderNavLinks=(e,t)=>{if(!Spicetify.React||!Spicetify.React.useReduc
         $c3WaitUnknown++
     }
 
+    # C4: showNotification shim. The upstream compat loop only bridges to
+    #   Snackbar.enqueueSnackbar, which does not exist on Spotify 1.3.4 (the
+    #   build exposes Snackbar.enqueueCustomSnackbar instead), so
+    #   Spicetify.showNotification stayed undefined and any extension calling it
+    #   threw "is not a function" into the error boundary (fatal dialog). The
+    #   upstream branch is left untouched; this shim only guarantees the method
+    #   exists: it prefers whatever the upstream branch assigned, then bridges to
+    #   Snackbar.enqueueCustomSnackbar, and silently no-ops on any failure.
+    $notifyAnchor = 'isError=h==="error",Spicetify.showNotification(l,isError,y)}})()'
+    $notifyShim = @'
+,(function(){/*fusion:notify*/var real=null;function fusionShowNotification(message,isError,duration){try{if(typeof real==="function")return real(message,isError,duration);var S=Spicetify.Snackbar||{};var f=S.enqueueCustomSnackbar;if(typeof f!=="function")return void 0;if(message===null||message===undefined)return void 0;var opts={keyPrefix:"fusion-notify"};if(typeof duration==="number")opts.autoHideDuration=duration;return f.call(S,message,opts)}catch(_){return void 0}}try{var cur=Spicetify.showNotification;if(typeof cur==="function")real=cur;Object.defineProperty(Spicetify,"showNotification",{configurable:true,enumerable:true,get:function(){return typeof real==="function"?real:fusionShowNotification},set:function(v){real=typeof v==="function"?v:null}})}catch(_){try{if(typeof Spicetify.showNotification!=="function")Spicetify.showNotification=fusionShowNotification}catch(__){}}})()
+'@.TrimEnd()
+    # Normalise an earlier C4 revision in place (identifier -> keyPrefix, and add
+    # the empty-message guard) so re-running the hotfix upgrades instead of
+    # stacking a second shim.
+    $notifyCurrent = 'if(typeof f!=="function")return void 0;if(message===null||message===undefined)return void 0;var opts={keyPrefix:"fusion-notify"}'
+    if ($wrapContent.Contains($notifyCurrent)) {
+        $c4Clean++
+    }
+    elseif ($wrapContent.Contains('/*fusion:notify*/')) {
+        $notifyBefore = $wrapContent
+        $wrapContent = $wrapContent.Replace('var opts={identifier:"fusion-showNotification"}', 'var opts={keyPrefix:"fusion-notify"}')
+        $wrapContent = $wrapContent.Replace('if(typeof f!=="function")return void 0;var opts={keyPrefix:"fusion-notify"}', $notifyCurrent)
+        if ($wrapContent -ne $notifyBefore) {
+            $wrapPatched = $true
+            $c4Applied++
+        }
+        else {
+            $c4Unknown++
+        }
+    }
+    elseif ($wrapContent.Contains($notifyAnchor)) {
+        $wrapContent = $wrapContent.Replace($notifyAnchor, $notifyAnchor + $notifyShim)
+        $wrapPatched = $true
+        $c4Applied++
+    }
+    else {
+        $c4Unknown++
+    }
+
     if ($wrapPatched) {
         [System.IO.File]::WriteAllText($wrapperPath, $wrapContent, (New-Object System.Text.UTF8Encoding($false)))
         Write-Log "[SUCCESS] Patched $wrapperPath" "Green"
@@ -629,6 +672,16 @@ elseif ($c3WaitClean -gt 0) {
 }
 else {
     Add-Result -Patch "C3c: bounded init wait" -Status failed -Detail "chunk-callback anchor not found"
+}
+
+if ($c4Applied -gt 0) {
+    Add-Result -Patch "C4: showNotification shim" -Status applied -Detail "$c4Applied wrapper(s) bridge to Snackbar.enqueueCustomSnackbar with a no-op fallback"
+}
+elseif ($c4Clean -gt 0) {
+    Add-Result -Patch "C4: showNotification shim" -Status not-needed -Detail "$c4Clean wrapper(s) already shimmed"
+}
+else {
+    Add-Result -Patch "C4: showNotification shim" -Status failed -Detail "snackbar compat anchor not found"
 }
 
 # SECTION D: Fix custom apps push headers in spicetify-routes-*.js

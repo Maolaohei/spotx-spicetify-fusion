@@ -533,6 +533,63 @@ $tabBarFixture = [System.IO.File]::ReadAllText((Join-Path $d2Cli "lyrics-plus\Ta
 Assert-That "tab bar portal host is patched" ($tabBarFixture.Contains('/*fusion:tabportal*/') -and $tabBarFixture.Contains('fusionTabHost ? Spicetify.ReactDOM.createPortal(fusionTabContent, fusionTabHost)')) -Detail "never portals into null"
 Assert-That "tab bar keeps the legacy top-bar lookup first" ($tabBarFixture.Contains('const fusionTabHost =') -and $tabBarFixture.Contains('document.querySelector(".main-topBar-topbarContentWrapper") ||')) -Detail "1.2.x behaviour preserved"
 
+# C4: Spicetify.showNotification must exist and never throw. The upstream compat
+# loop only waits for Snackbar.enqueueSnackbar (absent on 1.3.4), so the wrapper
+# installs a defensive shim that bridges to Snackbar.enqueueCustomSnackbar.
+$notifySnippets = @(
+    '/*fusion:notify*/',
+    'Object.defineProperty(Spicetify,"showNotification"',
+    'enqueueCustomSnackbar',
+    'keyPrefix:"fusion-notify"',
+    'if(message===null||message===undefined)return void 0;'
+)
+foreach ($snippet in $notifySnippets) {
+    Assert-That "notify shim carries $snippet" ($wrapperDeployed.Contains($snippet) -and $wrapperTemplate.Contains($snippet)) -Detail "deployed + CLI template"
+}
+Assert-That "upstream enqueueSnackbar branch is untouched" ($wrapperDeployed.Contains('Spicetify.Snackbar.enqueueSnackbar=(l,{variant:h="default",autoHideDuration:y}={})')) -Detail "existing compat branch preserved"
+$c4Entry = $report.results | Where-Object { $_.Patch -eq 'C4: showNotification shim' } | Select-Object -First 1
+Assert-That "C4: showNotification shim applied in the sandbox" ($c4Entry -and $c4Entry.status -eq 'applied') -Detail $(if ($c4Entry) { $c4Entry.status } else { 'missing entry' })
+
+$shimMatch = [regex]::Match($wrapperDeployed, '\(function\(\)\{/\*fusion:notify\*/[\s\S]*?\}\)\(\)')
+Assert-That "notify shim is extractable" $shimMatch.Success -Detail "$($shimMatch.Length) byte(s)"
+if ($shimMatch.Success -and $nodeCmd) {
+    $shimJs = Join-Path $work "notify-shim.mjs"
+    $harness = Join-Path $work "notify-shim-test.mjs"
+    Set-Content -Path $shimJs -Value $shimMatch.Value -Encoding ascii
+    $testSource = @'
+import fs from "node:fs";
+const src = fs.readFileSync(process.argv[2], "utf8");
+globalThis.Spicetify = { Snackbar: {} };
+let calls = [];
+globalThis.Spicetify.Snackbar.enqueueCustomSnackbar = (message, opts) => { calls.push({ message, opts }); return "key-1"; };
+eval(src);
+const S = globalThis.Spicetify;
+const fail = (m) => { console.error(m); process.exit(1); };
+if (typeof S.showNotification !== "function") fail("showNotification missing");
+const ret = S.showNotification("hello", false, 3000);
+if (ret !== "key-1") fail("return value not preserved: " + ret);
+if (calls.length !== 1 || calls[0].message !== "hello" || calls[0].opts.keyPrefix !== "fusion-notify" || calls[0].opts.autoHideDuration !== 3000) fail("bridge payload wrong: " + JSON.stringify(calls));
+calls = [];
+S.showNotification();
+if (calls.length !== 0) fail("empty message must not bridge");
+S.Snackbar.enqueueCustomSnackbar = () => { throw new Error("boom"); };
+S.showNotification("throwing");
+delete S.Snackbar.enqueueCustomSnackbar;
+S.showNotification("missing");
+S.Snackbar = undefined;
+S.showNotification("nosnack");
+if (typeof S.showNotification !== "function") fail("showNotification lost after failures");
+S.Snackbar = { enqueueCustomSnackbar: () => "custom" };
+let realCalled = false;
+S.showNotification = (m) => { realCalled = true; return "real"; };
+if (S.showNotification("m") !== "real" || !realCalled) fail("upstream implementation must win");
+console.log("notify shim behaviour OK");
+'@
+    Set-Content -Path $harness -Value $testSource -Encoding ascii
+    & $nodeCmd.Source $harness $shimJs *> $null
+    Assert-That "notify shim behaves defensively (node)" ($LASTEXITCODE -eq 0) -Detail "bridge / no-op / never throws / upstream wins"
+}
+
 # D2 overlap regression guard: app tab bars must never be portaled into the nav
 # container (that made the container taller and pushed the icons off the row).
 $topbarChain = 'document.querySelector(".main-view-container__scroll-node")'
