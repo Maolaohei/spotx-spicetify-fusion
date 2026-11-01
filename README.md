@@ -17,7 +17,7 @@
 > **This is a maintained fork** of [ZGQ-inc/spotx-spicetify-fusion](https://github.com/ZGQ-inc/spotx-spicetify-fusion).
 > Install commands below run the scripts **from this fork** (https://github.com/Maolaohei/spotx-spicetify-fusion), which keep the
 > SpotX / Spicetify flow working with the current upstream releases
-> (Spotify 1.3.4, Spicetify 2.45.3). Upstream credits and blog articles are kept as attribution.
+> (Spotify 1.3.4–1.3.6, Spicetify 2.46.4). Upstream credits and blog articles are kept as attribution.
 
 Seamlessly merge **[SpotX](https://github.com/SpotX-Official/SpotX)** (clean audio ad-blocking, podcast cleaner, visual tweaks) and **[Spicetify](https://spicetify.app)** (custom themes, JavaScript extensions, Marketplace, dev tools) without black screens, missing apps, or broken routes.
 
@@ -65,13 +65,16 @@ curl -fsSL https://raw.githubusercontent.com/Maolaohei/spotx-spicetify-fusion/ma
 
 ### 3. Optional: Install Curated Custom Apps & Extensions
 
-If you want popular third-party apps (**Lyrics Plus**, **Enhancify**, **Stats**) and essential extensions, run the standalone custom apps installer:
+If you want popular third-party apps (**Enhancify**, **Stats**) and essential extensions, run the standalone custom apps installer:
 
-The curated nav set is **Lyrics Plus (歌词) + Marketplace**: those are the only
-entries enabled and shown. **Enhancify** and **Stats** are still fetched (their
-files and compatibility patches stay available) but are left disabled, and the
-hotfix hides both nav entries - run `fix.ps1 -ShowAllApps` (or
-`SHOW_ALL_APPS=1 bash fix.sh`) to show every custom-app entry again.
+The curated nav set is **Marketplace only**: that is the single entry enabled
+and shown. **Enhancify** and **Stats** are still fetched (their files and
+compatibility patches stay available) but are left disabled, and the hotfix
+hides both nav entries - run `fix.ps1 -ShowAllApps` (or
+`SHOW_ALL_APPS=1 bash fix.sh`) to show every custom-app entry again. **Lyrics
+Plus** is no longer installed or enabled by this script: Spicetify 2.46 ships a
+reworked lyrics app of its own, and the old copy is what needed the 1.3.x
+viewport patches.
 
 #### Windows
 
@@ -92,14 +95,13 @@ curl -fsSL https://raw.githubusercontent.com/Maolaohei/spotx-spicetify-fusion/ma
   latest GitHub release at install time - **Enhancify** `1.0.0` is the newest upstream
   build (the project has not released since 2024-12), **Stats** installs the newest
   `stats-*` release and applies its legacy layout patch only if the bundle still
-  contains the old anchor, and **Lyrics Plus** ships inside the Spicetify CLI, so it
-  updates together with the CLI. Client-side patching is delegated to [fix.ps1](fix.ps1)
+  contains the old anchor. Client-side patching is delegated to [fix.ps1](fix.ps1)
   / [fix.sh](fix.sh), so there is only one patch pipeline to maintain.
 
-* **Curated nav set**: only **Lyrics Plus (歌词)** and **Marketplace** land in
-  `custom_apps`. **Enhancify** and **Stats** are installed but intentionally left
-  disabled, and [fix.ps1](fix.ps1) / [fix.sh](fix.sh) hide both entries in the
-  managed `/* fusion:navhide */` block (top-bar and expanded-library variants).
+* **Curated nav set**: only **Marketplace** lands in `custom_apps`.
+  **Enhancify** and **Stats** are installed but intentionally left disabled, and
+  [fix.ps1](fix.ps1) / [fix.sh](fix.sh) hide both entries in the managed
+  `/* fusion:navhide */` block (top-bar and expanded-library variants).
 
 > [!NOTE]
 > Some endpoint security suites (verified with Huorong 火绒) may quarantine a script
@@ -134,11 +136,11 @@ was verified against; a changed prompt fails the check loudly.
 `tools/verify-offline.ps1` rebuilds the whole pipeline from shipped artifacts:
 it downloads the pinned Spotify installer, extracts it to a temp sandbox
 (`/extract` only - no registry, no `%APPDATA%\Spotify` client), runs the real
-SpotX against it, applies Spicetify 2.45.3 + Marketplace with `spicetify -n`
+SpotX against it, applies Spicetify 2.46.4 + Marketplace with `spicetify -n`
 (never launches the client), runs `fix.ps1 -SpotifyDir <sandbox>` and asserts
 that an already-correct bundle is left byte-identical. It also verifies that
 every script banner, issue link and README one-liner points at this fork and
-that the published raw URLs resolve (151 assertions). The result is written to
+that the published raw URLs resolve (140 assertions). The result is written to
 `verify-out/offline-e2e.json`.
 
 ```powershell
@@ -156,16 +158,32 @@ bash tools/verify-shell-patches.sh
 
 | Component | Version | Result |
 | :--- | :--- | :--- |
-| Spotify (Windows x64) | `1.3.4.258.gc60b10b0946a` | extracted, SpotX-patched and verified offline |
+| Spotify (Windows x64) | `1.3.4.258.gc60b10b0946a`, `1.3.6.1921.g7086c071a617` | extracted, SpotX-patched and verified offline on both |
 | SpotX | `main`, version bumped to 1.3.4 | all 15 original flags still accepted; Spicetify guards neutralised |
-| Spicetify CLI | `v2.45.3` | `backup apply` succeeds on 1.3.4; custom apps registered natively |
+| Spicetify CLI | `v2.46.4` | `backup apply` succeeds on 1.3.4 and 1.3.6; custom apps registered natively |
 | Marketplace | latest release | route bundle, chunk map and CSS allowlist verified |
 
-On **Spotify 1.3.4 + Spicetify 2.45.3** the only patch that still has work to do
-is the snapshot filename casing (`V8_context_snapshot.bin` -> `v8_context_snapshot.bin`).
-The legacy `Snackbar` / `useNavigateStable` / `RegistryContext` / chunk-map /
-wrapper patches are probed and reported as `not-needed`, because Spicetify 2.45+
-handles Rspack custom apps natively.
+On **Spotify 1.3.4/1.3.6 + Spicetify 2.46.4** the snapshot filename casing
+(`V8_context_snapshot.bin` -> `v8_context_snapshot.bin`) is still needed, and three
+wrapper patches still have work to do.
+
+Spotify 1.3.6 splits the client bundle: `xpui.js` became `xpui-modules.js` (plus
+per-feature route files), and custom-app chunks are loaded by name
+(`i.e("spicetify-routes-marketplace")`) instead of a numeric `.u` map. The hotfix
+resolves whichever bundle exists and treats a named-chunk reference as already
+registered, so both layouts are covered:
+
+| Patch | State on 2.46.4 | Why |
+| :--- | :--- | :--- |
+| `C1` rspackChunk hook / `C2` URI self-start | `not-needed` | upstream already negotiates `window.rspackChunk` and seeds `Spicetify.URI` |
+| `C3` nav render guard | `not-needed` | 2.46.0 renders nav links through its own component that gates on `ReactComponent`/`Platform` and null-checks `Spicetify.React`, so the hook-order race is gone |
+| `C3b` exposure scan guard | `applied` | a not-yet-installed module still aborts `Object.keys(e.m).map(...)` |
+| `C3c` bounded init wait | `applied` | the chunk-callback poll still recurses without a deadline |
+| `C4` showNotification shim | `applied` | `Snackbar.enqueueSnackbar` still does not exist on 1.3.4 (only `enqueueCustomSnackbar`), so `Spicetify.showNotification` stayed undefined |
+
+The rest of the legacy set (`useNavigateStable` / `RegistryContext` / chunk map) is
+probed and reported as `not-needed`, because Spicetify 2.45+ handles Rspack custom
+apps natively.
 
 ## 🎯 Why Combine SpotX and Spicetify?
 
@@ -314,7 +332,7 @@ Properties:
 - Verified on Spotify `1.2.99.317.g9bd8c54d` + Spicetify `2.44.0`, Windows 11 (2026-09-07). Re-run after a Spotify
   update, `spicetify apply` / `backup apply` / `restore`, or a Spicetify upgrade.
 
-9. **Custom-app DOM compatibility with Spotify 1.3.x**: the curated apps and Spicetify's own `lyrics-plus`/`reddit` were written against 1.2.x DOM ids (`main-topBar-topbarContentWrapper`, `.Root__main-view`, `.os-viewport`, `.os-resize-observer-host`). On 1.3.x those lookups return `null`, the app throws while rendering (`React error #200` from `createPortal(children, null)`, or a `null` deref on `clientWidth`/`offsetTop`) and Spotify shows the fatal dialog again. Each selector keeps the legacy form first and appends the 1.3.x fallback (`#global-nav-bar`, `.main-view-container__scroll-node`, `.main-view-container`) plus null guards, and both the app sources and the deployed route bundles are patched. The app top-bar/tab-bar portal now falls back to the **page content** (`.main-view-container__scroll-node`) instead of the custom-navlinks container, so entering an app no longer stacks its tab bar on top of the extra-app row (`y=-24` and overlapping chips). The managed `/* fusion:navhide */` rules then hide the **Enhancify** and **Statistics** entries in both nav variants; `-ShowAllApps` / `SHOW_ALL_APPS=1` reverts to showing every entry. The lyrics-plus / reddit **tab-bar portal** (`TabBarContext`) is patched too: it used to `createPortal` into `.main-topBar-topbarContentWrapper`, which no longer exists on 1.3.x, so `createPortal(children, null)` threw React error #200 and the whole view turned into the fatal dialog as soon as the lyrics entry was opened. It now keeps the legacy lookup first, falls back to the page content and never portals into a null host (`/*fusion:tabportal*/`).
+9. **Custom-app DOM compatibility with Spotify 1.3.x**: the curated apps and Spicetify's own optional CLI apps (`reddit`; `lyrics-plus` left the curated set) were written against 1.2.x DOM ids (`main-topBar-topbarContentWrapper`, `.Root__main-view`, `.os-viewport`, `.os-resize-observer-host`). On 1.3.x those lookups return `null`, the app throws while rendering (`React error #200` from `createPortal(children, null)`, or a `null` deref on `clientWidth`/`offsetTop`) and Spotify shows the fatal dialog again. Each selector keeps the legacy form first and appends the 1.3.x fallback (`#global-nav-bar`, `.main-view-container__scroll-node`, `.main-view-container`) plus null guards, and both the app sources and the deployed route bundles are patched. The app top-bar/tab-bar portal now falls back to the **page content** (`.main-view-container__scroll-node`) instead of the custom-navlinks container, so entering an app no longer stacks its tab bar on top of the extra-app row (`y=-24` and overlapping chips). The managed `/* fusion:navhide */` rules then hide the **Enhancify** and **Statistics** entries in both nav variants; `-ShowAllApps` / `SHOW_ALL_APPS=1` reverts to showing every entry. The **tab-bar portal** (`TabBarContext`) shipped with Spicetify's optional CLI apps (reddit; lyrics-plus is no longer part of the curated set) is patched too: it used to `createPortal` into `.main-topBar-topbarContentWrapper`, which no longer exists on 1.3.x, so `createPortal(children, null)` threw React error #200 and the whole view turned into the fatal dialog as soon as the lyrics entry was opened. It now keeps the legacy lookup first, falls back to the page content and never portals into a null host (`/*fusion:tabportal*/`).
 
 10. **Cold-start nav race (extra-app entries)**: xpui can render its nav bar before the wrapper has bound `Spicetify.React` / populated `Spicetify.ReactComponent`. The old guard returned `null` before `Spicetify.React.useReducer`, so (a) the dispatch that refreshes the links was never stored and the entries never mounted, and (b) the first render without the hook followed by a later render with it is a React hook-order violation - a fatal dialog on the next navigation. The guard now binds `Spicetify.React` on demand from the already-loaded module map (`/*fusion:reactbind*/`), arms a bounded re-render retry (`/*fusion:navretry*/`) and keeps the native hook call unconditional; the exposure scan tolerates a not-yet-installed module (`/*fusion:scan*/`), and the init's chunk-callback wait is bounded (`/*fusion:noblock*/`) so a callback that never fires cannot leave `ReactComponent` empty. Verified with 20 cold starts each: fixed wrapper 0 failures, previous guard 1/20 with the entries missing, guard removed fatal on 2/3 earlier runs.
 

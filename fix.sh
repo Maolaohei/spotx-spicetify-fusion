@@ -84,7 +84,7 @@ if [ ${#TARGET_XPUI_DIRS[@]} -eq 0 ]; then
 fi
 
 if [ ${#TARGET_XPUI_DIRS[@]} -eq 0 ]; then
-    echo -e "${RED}[-] Error: Could not locate xpui.js. Please run 'spicetify backup apply' first.${NC}"
+    echo -e "${RED}[-] Error: Could not locate the xpui client bundle (xpui.js / xpui-modules.js). Please run 'spicetify backup apply' first.${NC}"
     exit 1
 fi
 
@@ -266,12 +266,19 @@ if not os.environ.get("KEEP_ENGLISH"):
         translate_helpers(template_dir)
 
 for xpui_dir in target_dirs:
-    xpui_js = os.path.join(xpui_dir, "xpui.js")
+    # The client entry bundle moved in Spotify 1.3.6: xpui.js became
+    # xpui-modules.js plus per-feature files. Patch whichever one exists.
+    xpui_js = None
+    for _bundle_name in ("xpui.js", "xpui-modules.js"):
+        _bundle_candidate = os.path.join(xpui_dir, _bundle_name)
+        if os.path.exists(_bundle_candidate):
+            xpui_js = _bundle_candidate
+            break
     wrapper_js = os.path.join(xpui_dir, "helper", "spicetifyWrapper.js")
     route_files = []
     custom_apps = []
 
-    if os.path.exists(xpui_js):
+    if xpui_js and os.path.exists(xpui_js):
         with open(xpui_js, "r", encoding="utf-8") as f:
             content = f.read()
 
@@ -386,7 +393,8 @@ for xpui_dir in target_dirs:
             for app in custom_apps:
                 bundle = "spicetify-routes-" + app
                 name_key = '"%s"' % bundle
-                already_mapped = (":" + name_key) in content
+                native_named_ref = bool(re.search(r'\.e\(\s*' + re.escape(name_key) + r'\s*\)', content))
+                already_mapped = (":" + name_key) in content or native_named_ref
                 if not already_mapped:
                     entry = '%d:%s,' % (app_id, name_key)
                     content, ok = insert_after_once(content, u_anchor, entry)
@@ -473,6 +481,11 @@ for xpui_dir in target_dirs:
         #   re-render retry and keeps the native hook call unconditional (a
         #   conditional hook is a React hook-order violation = fatal dialog).
         nav_anchor = "Spicetify._renderNavLinks=(e,t)=>{"
+        # Spicetify 2.46.0 renders the nav rows through a component that gates on
+        #   ReactComponent/Platform readiness and null-guards Spicetify.React
+        #   itself, so the hook-order failure this guard existed for cannot
+        #   happen there; the shapes below are kept for older wrappers.
+        nav_native_anchor = "Spicetify._renderNavLinks=(e,t)=>Spicetify.React?.createElement"
         nav_guard_old = "Spicetify._renderNavLinks=(e,t)=>{if(!Spicetify.React||!Spicetify.React.useReducer)return null;/*fusion:navlinks*/"
         nav_guard_new = (
             "Spicetify._fusionBindReact=function(){/*fusion:reactbind*/try{if(Spicetify.React&&Spicetify.React.useReducer)return true;"
@@ -496,6 +509,9 @@ for xpui_dir in target_dirs:
         )
         if "/*fusion:reactbind*/" in wcontent:
             add_result("C3: nav render guard", "not-needed", "already patched")
+        elif nav_native_anchor in wcontent:
+            add_result("C3: nav render guard", "not-needed",
+                       "renders nav through Spicetify's own guarded component (2.46.0+)")
         elif nav_guard_old in wcontent:
             wcontent = wcontent.replace(nav_guard_old, nav_guard_new, 1)
             wpatched = True
@@ -507,25 +523,36 @@ for xpui_dir in target_dirs:
         else:
             add_result("C3: nav render guard", "failed", "_renderNavLinks anchor not found")
 
-        # C3b: one not-yet-installed module must not abort the exposure scan
-        scan_old = "Object.keys(e.m).map(u=>e(u))"
-        scan_new = "Object.keys(e.m).map(u=>{try{return e(u)}catch(x){return null}})/*fusion:scan*/"
+        # C3b: one not-yet-installed module must not abort the exposure scan.
+        #   The scan is written as Object.keys(e.m).map(<name>=>e(<name>)) with a
+        #   build-specific identifier (u on 2.45.x, d on 2.46.x), so match the
+        #   shape instead of pinning the name.
+        scan_pat = re.compile(r"Object\.keys\(e\.m\)\.map\(([\w$]+)=>e\(\1\)\)")
         if "/*fusion:scan*/" in wcontent:
             add_result("C3b: exposure scan guard", "not-needed", "already tolerant")
-        elif scan_old in wcontent:
-            wcontent = wcontent.replace(scan_old, scan_new, 1)
+        elif scan_pat.search(wcontent):
+            wcontent = scan_pat.sub(
+                r"Object.keys(e.m).map(\1=>{try{return e(\1)}catch(x){return null}})/*fusion:scan*/",
+                wcontent, count=1)
             wpatched = True
             add_result("C3b: exposure scan guard", "applied", "tolerates a not-yet-installed module")
         else:
             add_result("C3b: exposure scan guard", "failed", "module scan anchor not found")
 
-        # C3c: a stuck "all chunks loaded" callback must not hang the init forever
-        wait_old = 'await M(()=>a,100),console.log("[spicetifyWrapper] All required webpack modules loaded")'
-        wait_new = 'await Promise.race([M(()=>a,100),new Promise(function(r){setTimeout(r,4000)})]),/*fusion:noblock*/console.log("[spicetifyWrapper] All required webpack modules loaded")'
+        # C3c: a stuck "all chunks loaded" callback must not hang the init forever.
+        #   The poll helper recurses until the flag flips with no deadline
+        #   (helper name b on 2.46.x, M on 2.45.x), so match the call shape.
+        wait_pat = re.compile(
+            r'await ([\w$]+)\(\(\)=>([\w$]+),100\),console\.log\("\[spicetifyWrapper\] '
+            r'All required webpack modules loaded"\)')
         if "/*fusion:noblock*/" in wcontent:
             add_result("C3c: bounded init wait", "not-needed", "already bounded")
-        elif wait_old in wcontent:
-            wcontent = wcontent.replace(wait_old, wait_new, 1)
+        elif wait_pat.search(wcontent):
+            wcontent = wait_pat.sub(
+                r'await Promise.race([\1(()=>\2,100),new Promise(function(fusionWait){'
+                r'setTimeout(fusionWait,4000)})]),/*fusion:noblock*/console.log('
+                r'"[spicetifyWrapper] All required webpack modules loaded")',
+                wcontent, count=1)
             wpatched = True
             add_result("C3c: bounded init wait", "applied", "stops waiting forever for the chunk callback")
         else:
@@ -539,7 +566,14 @@ for xpui_dir in target_dirs:
         #   this shim only guarantees the method exists: prefer whatever the
         #   upstream branch assigned, then bridge to enqueueCustomSnackbar, and
         #   silently no-op on any failure.
-        notify_anchor = 'isError=h==="error",Spicetify.showNotification(l,isError,y)}})()'
+        # Upstream writes the compat branch as
+        #   isError=<variant>==="error",Spicetify.showNotification(<msg>,isError,<ms)
+        # inside Spicetify.Snackbar.enqueueSnackbar, with build-specific
+        # identifiers (h/l/y on 2.45.x, p/a/m on 2.46.x). Locate it by offset
+        # instead of pinning a full literal: take the isError assignment, then
+        # the `}})()` that closes the arrow function and the IIFE, and splice the
+        # shim in after it.
+        notify_probe = 'isError='
         notify_shim = (
             ',(function(){/*fusion:notify*/var real=null;function fusionShowNotification(message,isError,duration){'
             'try{if(typeof real==="function")return real(message,isError,duration);'
@@ -570,12 +604,24 @@ for xpui_dir in target_dirs:
                 add_result("C4: showNotification shim", "applied", "upgraded to the keyPrefix bridge")
             else:
                 add_result("C4: showNotification shim", "failed", "shim present but not recognised")
-        elif notify_anchor in wcontent:
-            wcontent = wcontent.replace(notify_anchor, notify_anchor + notify_shim, 1)
-            wpatched = True
-            add_result("C4: showNotification shim", "applied", "bridges to Snackbar.enqueueCustomSnackbar with a no-op fallback")
         else:
-            add_result("C4: showNotification shim", "failed", "snackbar compat anchor not found")
+            notify_hit = -1
+            notify_start = wcontent.find(notify_probe)
+            while notify_start != -1:
+                notify_close = wcontent.find('}})()', notify_start)
+                notify_span = wcontent[notify_start:notify_start + 200]
+                if (notify_close != -1 and notify_close - notify_start < 200
+                        and 'Spicetify.showNotification(' in notify_span):
+                    notify_hit = notify_close + 5
+                    break
+                notify_start = wcontent.find(notify_probe, notify_start + 8)
+            if notify_hit > 0:
+                wcontent = wcontent[:notify_hit] + notify_shim + wcontent[notify_hit:]
+                wpatched = True
+                add_result("C4: showNotification shim", "applied",
+                           "bridges to Snackbar.enqueueCustomSnackbar with a no-op fallback")
+            else:
+                add_result("C4: showNotification shim", "failed", "snackbar compat anchor not found")
 
         if wpatched:
             with open(wrapper_js, "w", encoding="utf-8") as f:
@@ -642,10 +688,12 @@ else:
 if os.environ.get("SKIP_APP_PATCHES"):
     add_result("D2: custom-app patches", "skipped", "disabled with SKIP_APP_PATCHES=1")
 else:
-    # The lyrics-plus / reddit tab bar portals into the 1.2.x top-bar container
-    # (.main-topBar-topbarContentWrapper). On 1.3.x that lookup is null and
-    # ReactDOM.createPortal(children, null) throws React error #200, so the whole
-    # view is replaced by the fatal dialog as soon as the lyrics entry is opened.
+    # The tab bar shipped with Spicetify's optional CLI apps (reddit) portals
+    # into the 1.2.x top-bar container (.main-topBar-topbarContentWrapper). On
+    # 1.3.x that lookup is null and ReactDOM.createPortal(children, null) throws
+    # React error #200, so the whole view is replaced by the fatal dialog as soon
+    # as the entry is opened. lyrics-plus is not part of the curated set anymore
+    # and Spicetify >= 2.46 fixes its own TabBar upstream.
     TAB_PORTAL_OLD = (
         "const TabBarContext = ({ children }) => {\n"
         "\treturn Spicetify.ReactDOM.createPortal(\n"
@@ -692,29 +740,6 @@ else:
                     ' || document.querySelector(".main-view-container")'
                     ' || document.querySelector("#main") || document.body)/*fusion:topbar*/'),
         },
-        "viewportChain": {
-            "name": "D2: lyrics-plus main-view selectors",
-            "marker": "/*fusion:vp*/",
-            "old": ('document.querySelector(".Root__main-view .os-viewport") ?? '
-                    'document.querySelector(".Root__main-view .main-view-container__scroll-node")'),
-            "new": ('document.querySelector(".main-view-container__scroll-node") ?? '
-                    'document.querySelector(".main-view-container") ?? document.body/*fusion:vp*/'),
-        },
-        "viewportField": {
-            "name": "D2: lyrics-plus viewport field",
-            "marker": ('(document.querySelector(".main-view-container .os-viewport") ?? '
-                       'document.querySelector(".main-view-container__scroll-node") ?? document.body)'),
-            "old": 'document.querySelector(".main-view-container .os-viewport")',
-            "new": ('(document.querySelector(".main-view-container .os-viewport") ?? '
-                    'document.querySelector(".main-view-container__scroll-node") ?? document.body)'),
-        },
-        "offsetTop": {
-            "name": "D2: lyrics-plus main-view offset",
-            "marker": '?? document.querySelector(".main-view-container") ?? document.body).offsetTop',
-            "old": 'document.querySelector(".Root__main-view").offsetTop',
-            "new": ('((document.querySelector(".Root__main-view") ?? '
-                    'document.querySelector(".main-view-container") ?? document.body).offsetTop)'),
-        },
         "resizeSel": {
             "name": "D2: app resize-host selector",
             "marker": '.main-view-container__scroll-node, .main-view-container"',
@@ -756,19 +781,12 @@ else:
     d2_targets = [
         (os.path.join(user_apps, "stats", "index.js"), ["topbar"]),
         (os.path.join(user_apps, "marketplace", "index.js"), ["topbar"]),
-        (os.path.join(cli_apps, "lyrics-plus", "index.js"),
-         ["topbar", "viewportChain", "viewportField", "offsetTop"]),
-        (os.path.join(cli_apps, "lyrics-plus", "TabBar.js"),
-         ["resizeSel", "resizeInit", "resizeHandler", "observe", "tabPortal"]),
         (os.path.join(cli_apps, "reddit", "TabBar.js"),
          ["resizeSel", "resizeInit", "resizeHandler", "observe", "tabPortal"]),
     ]
     for xpui_dir in target_dirs:
         d2_targets.append((os.path.join(xpui_dir, "spicetify-routes-stats.js"), ["topbar"]))
         d2_targets.append((os.path.join(xpui_dir, "spicetify-routes-marketplace.js"), ["topbar"]))
-        d2_targets.append((os.path.join(xpui_dir, "spicetify-routes-lyrics-plus.js"),
-                           ["topbar", "viewportChain", "viewportField", "offsetTop",
-                            "resizeSel", "resizeInit", "resizeHandler", "observe", "tabPortal"]))
 
     d2_counts = {key: 0 for key in d2_patches}
     d2_touched = 0
@@ -850,7 +868,6 @@ else:
     NAV_ICONS = {
         "marketplace": '<svg role="img" aria-hidden="true" ' + NAV_ICON_ATTR + '><path d="M9 1v6h6V1H9zm5 5h-4V2h4v4zM.999 7h6V1h-6v6zM2 2h4v4H2V2zm7 13h6V9H9v6zm1-5h4v4h-4v-4zM.999 15h6V9h-6v6zM2 10h4v4H2v-4z"/></svg>',
         "stats": '<svg role="img" aria-hidden="true" ' + NAV_ICON_ATTR + '><path d="M.999 15h2V5h-2v10zm4 0h2V1h-2v14zM9 15h2v-4H9v4zm4-7v7h2V8h-2z"/></svg>',
-        "lyrics-plus": '<svg role="img" aria-hidden="true" ' + NAV_ICON_ATTR + '><path d="M8.5 1A4.505 4.505 0 004 5.5c0 .731.191 1.411.502 2.022L1.99 13.163a1.307 1.307 0 00.541 1.666l.605.349a1.307 1.307 0 001.649-.283L9.009 9.95C11.248 9.692 13 7.807 13 5.5 13 3.019 10.981 1 8.5 1zM4.023 14.245a.307.307 0 01-.388.066l-.605-.349a.309.309 0 01-.128-.393l2.26-5.078A4.476 4.476 0 007.715 9.92l-3.692 4.325zM8.5 9C6.57 9 5 7.43 5 5.5S6.57 2 8.5 2 12 3.57 12 5.5 10.429 9 8.5 9z"/></svg>',
         "Enhancify": '<svg role="img" aria-hidden="true" ' + NAV_ICON_ATTR + '><path d="M11.777.972c-.364 1.054-1.195 2.322-2.798 2.83-.115.036-.115.36 0 .396 1.603.508 2.434 1.775 2.798 2.83.04.114.406.114.446 0 .364-1.055 1.195-2.322 2.798-2.83.115-.036.115-.36 0-.396-1.603-.508-2.434-1.776-2.798-2.83-.04-.114-.406-.114-.446 0zM5.295 4.5a.75.75 0 01.747.682c.06.65.334 1.68.954 2.572.606.87 1.527 1.596 2.927 1.75a.75.75 0 010 1.491c-1.4.154-2.321.88-2.927 1.751a5.683 5.683 0 00-.954 2.572.75.75 0 01-1.493 0 5.683 5.683 0 00-.954-2.572c-.606-.87-1.527-1.597-2.927-1.75a.75.75 0 010-1.492c1.4-.154 2.321-.88 2.927-1.75.62-.892.894-1.922.954-2.572a.75.75 0 01.746-.682z"/></svg>',
     }
     css_targets = []

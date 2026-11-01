@@ -16,7 +16,7 @@
 >
 > **本仓库是 [ZGQ-inc/spotx-spicetify-fusion](https://github.com/ZGQ-inc/spotx-spicetify-fusion) 的维护分支（fork）**。
 > 下面的安装命令全部指向**本仓库**（https://github.com/Maolaohei/spotx-spicetify-fusion），已适配当前上游版本
-> （Spotify 1.3.4、Spicetify 2.45.3）。上游署名与博客文章作为来源保留。
+> （Spotify 1.3.4–1.3.6、Spicetify 2.46.4）。上游署名与博客文章作为来源保留。
 
 让 **[SpotX](https://github.com/SpotX-Official/SpotX)**（纯净无广告、干掉播客与有声书、音质与布局优化）与 **[Spicetify](https://spicetify.app)**（海量主题定制、JS 扩展、Marketplace 应用商店、开发者生态）实现无缝共存！
 
@@ -63,11 +63,12 @@ curl -fsSL https://raw.githubusercontent.com/Maolaohei/spotx-spicetify-fusion/ma
 
 ### 3. 可选：一键安装精选自定义应用与拓展 (Custom Apps & Extensions)
 
-若需要额外安装精选的第三方独立应用（如 **Lyrics Plus** 歌词、**Enhancify** 增强面板、**Stats** 听歌统计及各类快捷键拓展），运行独立拓展安装脚本即可：
+若需要额外安装精选的第三方独立应用（如 **Enhancify** 增强面板、**Stats** 听歌统计及各类快捷键拓展），运行独立拓展安装脚本即可：
 
-精选导航集只保留 **歌词（lyrics-plus）+ Marketplace** 两个入口：这两个才会被启用/显示。
-**Enhancify** 与 **Stats** 仍会被下载（文件与兼容补丁保留），但**不启用**，热修复也会在
-导航栏隐藏这两个入口——需要全部显示时运行 `fix.ps1 -ShowAllApps`（Linux：`SHOW_ALL_APPS=1 bash fix.sh`）。
+精选导航集只保留 **Marketplace** 一个入口，它才会被启用/显示。**Enhancify** 与 **Stats**
+仍会被下载（文件与兼容补丁保留），但**不启用**，热修复也会在导航栏隐藏这两个入口——需要全部
+显示时运行 `fix.ps1 -ShowAllApps`（Linux：`SHOW_ALL_APPS=1 bash fix.sh`）。**歌词（lyrics-plus）**
+不再由本脚本安装/启用：Spicetify 2.46 已自带重写过的歌词应用，而旧版才是需要那些 1.3.x 视口补丁的那个。
 
 #### Windows
 
@@ -86,10 +87,9 @@ curl -fsSL https://raw.githubusercontent.com/Maolaohei/spotx-spicetify-fusion/ma
 
 * **始终取上游最新构建**：脚本在安装时从各自的上游最新 release 解析——**Enhancify**
   上游最新只有 `1.0.0`（2024-12 之后未再发版）；**Stats** 会装最新的 `stats-*` release，其旧版
-  布局补丁仅在 bundle 仍含旧锚点时才会应用；**Lyrics Plus** 随 Spicetify CLI 一起发布，
-  更新 CLI 即更新它。客户端补丁统一交给 [fix.ps1](fix.ps1) / [fix.sh](fix.sh)，只维护一份。
+  布局补丁仅在 bundle 仍含旧锚点时才会应用。客户端补丁统一交给 [fix.ps1](fix.ps1) / [fix.sh](fix.sh)，只维护一份。
 
-* **精选导航集**：只有 **歌词（lyrics-plus）** 与 **Marketplace** 会写进 `custom_apps`。
+* **精选导航集**：只有 **Marketplace** 会写进 `custom_apps`。
   **Enhancify** 与 **Stats** 会安装但有意不启用，并由 [fix.ps1](fix.ps1) / [fix.sh](fix.sh)
   在受管 `/* fusion:navhide */` 块中隐藏这两个入口（顶栏与展开型资料库两种变体均生效）。
 
@@ -117,7 +117,7 @@ bash install.sh --verify-only
 
 ### 离线端到端验证（Windows，不安装）
 
-`tools/verify-offline.ps1` 会用已发布的固定工件把整条流水线重跑一遍：下载固定版本的 Spotify 安装包，仅用 `/extract` 解包到临时沙箱（不写注册表、不产生 `%APPDATA%\Spotify`），用真实 SpotX 给它打补丁，再用 `spicetify -n`（**不会启动客户端**）应用 Spicetify 2.45.3 + Marketplace，最后用 `fix.ps1 -SpotifyDir <沙箱>` 处理，并断言“本来就正确”的 bundle 保持字节不变；同时校验所有脚本横幅、issue 链接与 README 一行命令都指向本仓库，并确认已发布的 raw URL 可访问（共 151 项断言）。结果写入 `verify-out/offline-e2e.json`。
+`tools/verify-offline.ps1` 会用已发布的固定工件把整条流水线重跑一遍：下载固定版本的 Spotify 安装包，仅用 `/extract` 解包到临时沙箱（不写注册表、不产生 `%APPDATA%\Spotify`），用真实 SpotX 给它打补丁，再用 `spicetify -n`（**不会启动客户端**）应用 Spicetify 2.46.4 + Marketplace，最后用 `fix.ps1 -SpotifyDir <沙箱>` 处理，并断言“本来就正确”的 bundle 保持字节不变；同时校验所有脚本横幅、issue 链接与 README 一行命令都指向本仓库，并确认已发布的 raw URL 可访问（共 140 项断言）。结果写入 `verify-out/offline-e2e.json`。
 
 ```powershell
 pwsh tools/verify-offline.ps1
@@ -133,12 +133,24 @@ bash tools/verify-shell-patches.sh
 
 | 组件 | 版本 | 结果 |
 | :--- | :--- | :--- |
-| Spotify (Windows x64) | `1.3.4.258.gc60b10b0946a` | 已解包、已由 SpotX 打补丁、离线验证通过 |
+| Spotify (Windows x64) | `1.3.4.258.gc60b10b0946a`、`1.3.6.1921.g7086c071a617` | 两个版本均已解包、由 SpotX 打补丁、离线验证通过 |
 | SpotX | `main`（版本号已提到 1.3.4） | 原有 15 个参数仍全部可用；Spicetify 拦截提示已消除 |
-| Spicetify CLI | `v2.45.3` | 在 1.3.4 上 `backup apply` 成功；自定义应用由其原生注册 |
+| Spicetify CLI | `v2.46.4` | 在 1.3.4 与 1.3.6 上 `backup apply` 均成功；自定义应用由其原生注册 |
 | Marketplace | 最新 release | 路由 bundle、chunk map 与 CSS 白名单均已验证 |
 
-在 **Spotify 1.3.4 + Spicetify 2.45.3** 上，真正还需要动的只剩快照文件名大小写（`V8_context_snapshot.bin` -> `v8_context_snapshot.bin`）；旧的 `Snackbar` / `useNavigateStable` / `RegistryContext` / chunk map / wrapper 补丁都会被探测并标记为 `not-needed`（Spicetify 2.45+ 已原生处理 Rspack 自定义应用）。
+在 **Spotify 1.3.4/1.3.6 + Spicetify 2.46.4** 上，快照文件名大小写（`V8_context_snapshot.bin` -> `v8_context_snapshot.bin`）仍需要，另外还有三条 wrapper 补丁确实要动。
+
+Spotify 1.3.6 把客户端主 bundle 拆了：`xpui.js` 变成 `xpui-modules.js`（外加各功能路由文件），自定义应用的 chunk 也改成按名字加载（`i.e("spicetify-routes-marketplace")`）而不再用数字 `.u` 表。热修复会按存在的那个 bundle 处理，并把「按名引用」视为已注册，两种布局都覆盖：
+
+| 补丁 | 2.46.4 上的状态 | 原因 |
+| :--- | :--- | :--- |
+| `C1` rspackChunk hook / `C2` URI 自启动 | `not-needed` | 上游已自行协商 `window.rspackChunk` 并预置 `Spicetify.URI` |
+| `C3` 导航渲染保护 | `not-needed` | 2.46.0 起用自带组件渲染导航入口，内部检查 `ReactComponent`/`Platform` 是否就绪并对 `Spicetify.React` 判空，hook 顺序问题已不存在 |
+| `C3b` 模块扫描保护 | `applied` | 仍未安装的模块依旧会让 `Object.keys(e.m).map(...)` 整体抛错 |
+| `C3c` 初始化等待上限 | `applied` | 等待 chunk 回调的轮询仍是无上限递归 |
+| `C4` showNotification 兜底 | `applied` | 1.3.4 上仍只有 `Snackbar.enqueueCustomSnackbar`、没有 `enqueueSnackbar`，`Spicetify.showNotification` 依然会是 undefined |
+
+其余旧补丁（`useNavigateStable` / `RegistryContext` / chunk map）都会被探测并标记为 `not-needed`（Spicetify 2.45+ 已原生处理 Rspack 自定义应用）。
 
 ## 🎯 为什么要同时使用 SpotX 和 Spicetify？
 
@@ -245,7 +257,7 @@ graph TD
 7. **平替与标准化快照命名**：将 SpotX 恶意修改的大写 `V8_context_snapshot.bin` 恢复标准小写，保障 1.2.x 存量逻辑不受干扰。
 8. **Spicetify 面板汉化**：Spicetify 自带的 **实验性功能**、**首页排序**、**侧边栏配置** 三个面板只有英文。脚本会把菜单入口、`Up`/`Down`/`Stick`/`Lower`/`Hide` 按钮、搜索框、重置行与提示语全部换成中文，并且**同时改写 CLI 模板**（这样每次 `spicetify apply` 出来的仍是中文）与已经部署到客户端的副本。**实验性功能面板内部的功能项也已汉化**：这些文案是 Spotify 自己的功能开关描述（写在客户端 bundle 里），所以仓库提供 [i18n/exp-features.zh.json](i18n/exp-features.zh.json) 映射表（按内部开关名索引），补丁向 `expFeatures.js` 注入查表逻辑——字典里没有的新开关自动回退英文，Spotify 升级不会把面板弄坏。替换文本以 JS 的 `\uXXXX` 转义写入，保证脚本本体仍为纯 ASCII。如需保留英文：`fix.ps1 -KeepEnglish` / `KEEP_ENGLISH=1 bash fix.sh`。
 
-9. **自定义应用与 Spotify 1.3.x 的 DOM 兼容**：精选应用与 Spicetify 自带的 `lyrics-plus`/`reddit` 都写的是 1.2.x 的 DOM 选择器（`main-topBar-topbarContentWrapper`、`.Root__main-view`、`.os-viewport`、`.os-resize-observer-host`）；在 1.3.x 上这些查询返回 `null`，应用渲染时直接抛错（`createPortal(children, null)` 触发 React error #200，或对 `clientWidth`/`offsetTop` 的 null 解引用），于是又出现致命弹窗。现在每个选择器都保留旧写法在前、追加 1.3.x 回退（`#global-nav-bar`、`.main-view-container__scroll-node`、`.main-view-container`）并加空值保护，且**同时改写应用源码与已部署的路由 bundle**。应用的顶栏/标签栏 portal 现在回退到**页面内容区**（`.main-view-container__scroll-node`）而不是 `custom-navlinks` 容器，因此进入应用时它的标签栏不会再叠在「额外功能」入口行上（之前会把容器撑到 112px、把入口顶到 `y=-24` 并与相邻按钮重叠）。受管的 `/* fusion:navhide */` 规则再把 **Enhancify** 与 **Statistics** 两个入口在两种导航变体下隐藏；`-ShowAllApps` / `SHOW_ALL_APPS=1` 可恢复显示全部入口。lyrics-plus / reddit 的**标签栏 portal**（`TabBarContext`）也已修补：原先把标签栏 `createPortal` 到 1.3.x 已不存在的 `.main-topBar-topbarContentWrapper`，`createPortal(children, null)` 会抛 React error #200，一点「歌词」整个界面就变成「出错了」。现在保留旧选择器在前、回退到页面内容区，并保证永不把 portal 目标置空（`/*fusion:tabportal*/`）。
+9. **自定义应用与 Spotify 1.3.x 的 DOM 兼容**：精选应用与 Spicetify 可选 CLI 应用（`reddit`；`lyrics-plus` 已不在精选集）都写的是 1.2.x 的 DOM 选择器（`main-topBar-topbarContentWrapper`、`.Root__main-view`、`.os-viewport`、`.os-resize-observer-host`）；在 1.3.x 上这些查询返回 `null`，应用渲染时直接抛错（`createPortal(children, null)` 触发 React error #200，或对 `clientWidth`/`offsetTop` 的 null 解引用），于是又出现致命弹窗。现在每个选择器都保留旧写法在前、追加 1.3.x 回退（`#global-nav-bar`、`.main-view-container__scroll-node`、`.main-view-container`）并加空值保护，且**同时改写应用源码与已部署的路由 bundle**。应用的顶栏/标签栏 portal 现在回退到**页面内容区**（`.main-view-container__scroll-node`）而不是 `custom-navlinks` 容器，因此进入应用时它的标签栏不会再叠在「额外功能」入口行上（之前会把容器撑到 112px、把入口顶到 `y=-24` 并与相邻按钮重叠）。受管的 `/* fusion:navhide */` 规则再把 **Enhancify** 与 **Statistics** 两个入口在两种导航变体下隐藏；`-ShowAllApps` / `SHOW_ALL_APPS=1` 可恢复显示全部入口。Spicetify 可选 CLI 应用（此处是 reddit；lyrics-plus 已不在精选集）的**标签栏 portal**（`TabBarContext`）也已修补：原先把标签栏 `createPortal` 到 1.3.x 已不存在的 `.main-topBar-topbarContentWrapper`，`createPortal(children, null)` 会抛 React error #200，一点「歌词」整个界面就变成「出错了」。现在保留旧选择器在前、回退到页面内容区，并保证永不把 portal 目标置空（`/*fusion:tabportal*/`）。
 
 10. **冷启动导航竞态（额外功能入口）**：xpui 可能在 wrapper 绑定 `Spicetify.React` / 填充 `Spicetify.ReactComponent` 之前就渲染导航。旧守卫在 `Spicetify.React.useReducer` 之前提前 `return null`，于是（1）用于刷新链接的 dispatch 从未被保存，入口永远不挂载；（2）首次渲染不调 hook、后续渲染又调 hook 属于 React hook 顺序违规，下次导航就弹「出错了」。现在守卫改为按需从已加载模块表同步绑定 `Spicetify.React`（`/*fusion:reactbind*/`）、装了有界重渲染重试（`/*fusion:navretry*/`），并保持 hook 调用无条件；暴露扫描容忍尚未安装的模块（`/*fusion:scan*/`），init 等待 chunk 回调也加了上界（`/*fusion:noblock*/`），避免回调不触发导致 `ReactComponent` 永远为空。各配置连续 20 次冷启动实测：修复版 0 失败；旧守卫 1/20 入口缺失；移除守卫早期 2/3 直接致命弹窗。
 

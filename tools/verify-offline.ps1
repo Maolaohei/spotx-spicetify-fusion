@@ -8,7 +8,7 @@
       1. download the pinned Spotify 1.3.4 installer and verify its SHA-256,
       2. run the real SpotX run.ps1 against an extracted client sandbox
          (-SpotifyPath, no install, no shortcut, no registry writes),
-      3. install Spicetify 2.45.3 (portable, SPICETIFY_CONFIG points at a temp
+      3. install Spicetify 2.46.4 (portable, SPICETIFY_CONFIG points at a temp
          dir) and run `spicetify -n backup apply` with the Marketplace custom
          app (-n keeps the sandbox client from being launched),
       4. run fix.ps1 -SpotifyDir <sandbox> -ReportPath <artifact>,
@@ -53,7 +53,7 @@ New-Item -ItemType Directory -Force -Path $CacheDir, $OutDir | Out-Null
 $SpotifySetupUrl = "https://loadspot.amd64fox1.workers.dev/download/spotify_installer-1.3.4.258.gc60b10b0946a-x64.exe"
 $SpotifySetupSize = 156864632
 $XpuiSpaSha256 = "19be39b9f8da51a5e766699bc0e7a8bf6dc6f09b1b733a2d8feb4cb2e1ce0608"
-$SpicetifyZipUrl = "https://github.com/spicetify/cli/releases/download/v2.45.3/spicetify-2.45.3-windows-x64.zip"
+$SpicetifyZipUrl = "https://github.com/spicetify/cli/releases/download/v2.46.4/spicetify-2.46.4-windows-x64.zip"
 $MarketplaceZipUrl = "https://github.com/spicetify/marketplace/releases/latest/download/marketplace.zip"
 
 $Assertions = New-Object System.Collections.Generic.List[object]
@@ -143,6 +143,22 @@ function Get-InstallFingerprint {
         }
         else { '<absent>' }
     }
+    # The deployed app tree is what an unisolated `spicetify apply` or a
+    # fix.ps1 run without -SpotifyDir rewrites, so it belongs in the identity
+    # too: name + size + write time of every deployed file, folded to one digest.
+    $deployedApps = Join-Path $realAppSpotify "Apps\xpui"
+    if (Test-Path $deployedApps) {
+        $rows = Get-ChildItem -Path $deployedApps -Recurse -File -Force |
+            Sort-Object FullName |
+            ForEach-Object { '{0}|{1}|{2}' -f $_.FullName.Substring($deployedApps.Length), $_.Length, $_.LastWriteTimeUtc.Ticks }
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $digest = [System.BitConverter]::ToString($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes(($rows -join "`n")))).Replace('-', '')
+        }
+        finally { $sha.Dispose() }
+        $items += ('deployed-apps|{0}|{1}' -f $rows.Count, $digest.Substring(0, 32))
+    }
+    else { $items += 'deployed-apps|<absent>' }
     return ($items -join ';')
 }
 
@@ -216,7 +232,7 @@ if ($realAppExisted -or $realLocalExisted) {
 # ---------------------------------------------------------------------------
 Write-Step "Fetching pinned artifacts"
 $installer = Get-DownloadedFile -Url $SpotifySetupUrl -Path (Join-Path $CacheDir "SpotifySetup-1.3.4.exe") -ExpectedSize $SpotifySetupSize -Name "Spotify 1.3.4 installer"
-$spicetifyZip = Get-DownloadedFile -Url $SpicetifyZipUrl -Path (Join-Path $CacheDir "spicetify-2.45.3-windows-x64.zip") -Name "Spicetify 2.45.3"
+$spicetifyZip = Get-DownloadedFile -Url $SpicetifyZipUrl -Path (Join-Path $CacheDir "spicetify-2.46.4-windows-x64.zip") -Name "Spicetify 2.46.4"
 $marketplaceZip = Get-DownloadedFile -Url $MarketplaceZipUrl -Path (Join-Path $CacheDir "marketplace.zip") -Name "Marketplace release"
 $installerSha = Get-FileHash256 $installer
 Assert-That "Spotify installer size/hash pinned" ((Get-Item $installer).Length -eq $SpotifySetupSize) -Detail "sha256 $installerSha"
@@ -283,13 +299,13 @@ $spaEntries = & {
 Assert-That "SpotX rebuilt xpui.js inside xpui.spa" ($spaEntries -contains "xpui.js") -Detail "rspack bundle present"
 
 # ---------------------------------------------------------------------------
-# 3. Spicetify 2.45.3 + Marketplace, fully portable
+# 3. Spicetify 2.46.4 + Marketplace, fully portable
 # ---------------------------------------------------------------------------
-Write-Step "Applying Spicetify 2.45.3 + Marketplace in the sandbox"
+Write-Step "Applying Spicetify 2.46.4 + Marketplace in the sandbox"
 $spicetifyDir = Join-Path $work "spicetify"
 Expand-Zip -Zip $spicetifyZip -Destination $spicetifyDir
 $spicetifyExe = Join-Path $spicetifyDir "spicetify.exe"
-Assert-That "spicetify.exe extracted" (Test-Path $spicetifyExe) -Detail "v2.45.3 windows-x64"
+Assert-That "spicetify.exe extracted" (Test-Path $spicetifyExe) -Detail "v2.46.4 windows-x64"
 
 $spConfig = Join-Path $work "sp-config"
 New-Item -ItemType Directory -Force -Path (Join-Path $spConfig "CustomApps") | Out-Null
@@ -321,7 +337,7 @@ finally {
     $env:SPICETIFY_CONFIG = $previousConfig
     $ErrorActionPreference = $previousEap
 }
-Assert-That "spicetify backup apply exit code 0" ($applyExit -eq 0) -Detail "Spicetify 2.45.3 on Spotify 1.3.4"
+Assert-That "spicetify backup apply exit code 0" ($applyExit -eq 0) -Detail "Spicetify 2.46.4 on Spotify 1.3.4"
 Assert-That "real install untouched by the whole run (%APPDATA%)" ((Get-InstallFingerprint) -eq $appInstallBefore) -Detail $(if ($realAppExisted) { '%APPDATA%\Spotify files unchanged' } else { 'no %APPDATA%\Spotify created' })
 Assert-That "no real Spotify runtime dir created (%LOCALAPPDATA%)" ($realLocalExisted -or -not (Test-Path $realLocalSpotify)) -Detail $(if ($realLocalExisted) { 'pre-existing, untouched' } else { 'no %LOCALAPPDATA%\Spotify created' })
 if (-not $realAppExisted -and (Test-Path $realAppSpotify)) { Remove-Item $realAppSpotify -Recurse -Force -ErrorAction SilentlyContinue }
@@ -357,10 +373,10 @@ $fixReport = Join-Path $OutDir "fix-report.json"
 $d2Root = Join-Path $work "d2-apps"
 $d2User = Join-Path $d2Root "user"
 $d2Cli = Join-Path $d2Root "cli"
-New-Item -ItemType Directory -Force -Path (Join-Path $d2User "stats"), (Join-Path $d2User "marketplace"), (Join-Path $d2Cli "lyrics-plus"), (Join-Path $d2Cli "reddit") | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $d2User "stats"), (Join-Path $d2User "marketplace"), (Join-Path $d2Cli "reddit") | Out-Null
 $d2ThemeDir = Join-Path $d2Root "theme"
 New-Item -ItemType Directory -Force -Path $d2ThemeDir | Out-Null
-foreach ($fixtureApp in @("stats", "marketplace", "lyrics-plus", "Enhancify")) {
+foreach ($fixtureApp in @("stats", "marketplace", "reddit", "Enhancify")) {
     $manifestDir = if ($fixtureApp -eq "stats" -or $fixtureApp -eq "marketplace") { Join-Path $d2User $fixtureApp } else { Join-Path $d2Cli $fixtureApp }
     New-Item -ItemType Directory -Force -Path $manifestDir | Out-Null
     '{ "name": "' + $fixtureApp + '", "icon": "<svg viewBox=\"0 0 99 99\"><path d=\"M0 0h1v1H0z\"/></svg>" }' | Set-Content -Path (Join-Path $manifestDir "manifest.json") -Encoding ascii
@@ -368,21 +384,15 @@ foreach ($fixtureApp in @("stats", "marketplace", "lyrics-plus", "Enhancify")) {
 $d2Topbar = 'const nav = document.querySelector(".main-topBar-topbarContentWrapper");'
 Set-Content -Path (Join-Path $d2User "stats\index.js") -Value $d2Topbar -Encoding ascii
 Set-Content -Path (Join-Path $d2User "marketplace\index.js") -Value $d2Topbar -Encoding ascii
-$d2Lyrics = @'
-const vpChain = document.querySelector(".Root__main-view .os-viewport") ?? document.querySelector(".Root__main-view .main-view-container__scroll-node");
-this.viewPort = document.querySelector(".main-view-container .os-viewport");
-this.mainViewOffsetTop = document.querySelector(".Root__main-view").offsetTop;
-const topBar = document.querySelector(".main-topBar-topbarContentWrapper");
-'@
-Set-Content -Path (Join-Path $d2Cli "lyrics-plus\index.js") -Value $d2Lyrics -Encoding ascii
 $d2TabBar = @'
 const resizeHost = document.querySelector(".Root__main-view .os-resize-observer-host, .Root__main-view .os-size-observer, .Root__main-view .main-view-container__scroll-node");
 const [windowSize, setWindowSize] = useState(resizeHost.clientWidth);
 const resizeHandler = () => setWindowSize(resizeHost.clientWidth);
 observer.observe(resizeHost);
 '@
-# The real tab bar portals into the 1.2.x top-bar container; reproduce that
-# exactly (tabs included) so the tabPortal patch has something to match.
+# The real tab bar (Spicetify's optional CLI apps, reddit here) portals into
+# the 1.2.x top-bar container; reproduce that exactly (tabs included) so the
+# tabPortal patch has something to match.
 $d2Tab = [char]9
 $d2TabBar += (@(
         'const TabBarContext = ({ children }) => {'
@@ -398,7 +408,6 @@ $d2TabBar += (@(
         ($d2Tab + ');')
         '};'
     ) -join "`n") + "`n"
-Set-Content -Path (Join-Path $d2Cli "lyrics-plus\TabBar.js") -Value $d2TabBar -Encoding ascii
 Set-Content -Path (Join-Path $d2Cli "reddit\TabBar.js") -Value $d2TabBar -Encoding ascii
 
 $fixPs1 = Join-Path $RepoRoot "fix.ps1"
@@ -453,9 +462,6 @@ Assert-That "C2 reported as applied" ($uriPatch -and $uriPatch.status -eq 'appli
 # result must still be valid JavaScript.
 $d2Expected = @(
     'D2: app top-bar container',
-    'D2: lyrics-plus main-view selectors',
-    'D2: lyrics-plus viewport field',
-    'D2: lyrics-plus main-view offset',
     'D2: app resize-host selector',
     'D2: app resize-host null guard',
     'D2: app resize-handler null guard',
@@ -468,8 +474,6 @@ foreach ($name in $d2Expected) {
 }
 $d2Files = @(
     (Join-Path $d2User "stats\index.js"),
-    (Join-Path $d2Cli "lyrics-plus\index.js"),
-    (Join-Path $d2Cli "lyrics-plus\TabBar.js"),
     (Join-Path $d2Cli "reddit\TabBar.js")
 )
 foreach ($file in $d2Files) {
@@ -501,8 +505,9 @@ Assert-That "nav entries align with the native row" ($styleText.Contains('align-
 Assert-That "no stale 8px rule left in the block" (-not $styleText.Contains('border-radius: 8px')) -Detail "single managed block"
 Assert-That "deployed user.css got the block too" ((Get-Content -Path $clientCss -Raw -Encoding UTF8).Contains('/* fusion:navstyle */')) -Detail "applies without a rebuild"
 
-# H: every fixture manifest switched to the Spotify-style glyph
-foreach ($fixtureApp in @("stats", "marketplace", "lyrics-plus", "Enhancify")) {
+# H: every fixture manifest switched to the Spotify-style glyph (only the apps
+# fix.ps1 carries a glyph for; reddit/lyrics-plus are not in the icon map)
+foreach ($fixtureApp in @("stats", "marketplace", "Enhancify")) {
     $manifestDir = if ($fixtureApp -eq "stats" -or $fixtureApp -eq "marketplace") { Join-Path $d2User $fixtureApp } else { Join-Path $d2Cli $fixtureApp }
     $iconText = Get-Content -Path (Join-Path $manifestDir "manifest.json") -Raw -Encoding UTF8
     Assert-That "icon unified: $fixtureApp" ($iconText.Contains('data-fusion-navicon') -and $iconText.Contains('viewBox=\"0 0 16 16\"')) -Detail "single 16x16 currentColor glyph"
@@ -510,26 +515,30 @@ foreach ($fixtureApp in @("stats", "marketplace", "lyrics-plus", "Enhancify")) {
 $routeIcon = Get-Content -Path (Join-Path $appsDir "spicetify-routes-marketplace.json") -Raw -Encoding UTF8
 Assert-That "deployed route manifest icon unified" ($routeIcon.Contains('data-fusion-navicon')) -Detail "nav renders the unified glyph"
 
-# C3: the nav renderer must not throw before Spicetify.React is bound
+# C3: Spicetify >= 2.46.0 renders nav links through its own guarded component
+# (vt), which null-checks Spicetify.React and gates on ReactComponent/Platform
+# readiness, so the hook-order race this guard existed for cannot happen there.
+# The fusion guard must therefore NOT be injected on that build - it would only
+# fight the upstream component.
 $wrapperDeployed = [System.IO.File]::ReadAllText((Join-Path $appsDir "helper\spicetifyWrapper.js"), [System.Text.Encoding]::UTF8)
 $wrapperTemplate = [System.IO.File]::ReadAllText((Join-Path $spicetifyDir "jsHelper\spicetifyWrapper.js"), [System.Text.Encoding]::UTF8)
-Assert-That "deployed wrapper guards _renderNavLinks" ($wrapperDeployed.Contains('/*fusion:navlinks*/')) -Detail "returns early until React is bound"
-Assert-That "CLI template guards _renderNavLinks" ($wrapperTemplate.Contains('/*fusion:navlinks*/')) -Detail "survives spicetify apply"
-# C3 race fix: bind React on demand, keep the hook unconditional, survive an
-# init that never sees the chunk callback and a not-yet-installed module.
-Assert-That "deployed wrapper binds Spicetify.React on demand" ($wrapperDeployed.Contains('/*fusion:reactbind*/') -and $wrapperDeployed.Contains('if(!Spicetify._fusionBindReact())return null;')) -Detail "first render can call the hook"
-Assert-That "CLI template binds Spicetify.React on demand" ($wrapperTemplate.Contains('/*fusion:reactbind*/')) -Detail "survives spicetify apply"
-Assert-That "wrapper arms the bounded nav retry" ($wrapperDeployed.Contains('/*fusion:navretry*/') -and $wrapperTemplate.Contains('/*fusion:navretry*/')) -Detail "re-renders once ReactComponent is ready"
+$navNative = 'Spicetify._renderNavLinks=(e,t)=>Spicetify.React?.createElement'
+Assert-That "wrapper ships Spicetify's native guarded nav renderer" ($wrapperDeployed.Contains($navNative) -and $wrapperTemplate.Contains($navNative)) -Detail "2.46.0+ component owns the race"
+Assert-That "no redundant nav guard injected" (-not $wrapperDeployed.Contains('/*fusion:navlinks*/') -and -not $wrapperDeployed.Contains('/*fusion:reactbind*/') -and -not $wrapperTemplate.Contains('/*fusion:navlinks*/')) -Detail "native guard left in charge"
+$c3Entry = $report.results | Where-Object { $_.Patch -eq 'C3: nav render guard' } | Select-Object -First 1
+Assert-That "C3 stood down for the native guard" ($c3Entry -and $c3Entry.status -eq 'not-needed' -and $c3Entry.detail -match '2\.46\.0\+') -Detail $(if ($c3Entry) { "$($c3Entry.status): $($c3Entry.detail)" } else { 'missing entry' })
+# C3b/C3c are still required on this build: the module exposure scan still
+# aborts on a not-yet-installed module and the init wait still has no deadline.
 Assert-That "exposure scan tolerates a missing module" ($wrapperDeployed.Contains('/*fusion:scan*/') -and $wrapperTemplate.Contains('/*fusion:scan*/')) -Detail "one bad module cannot abort the exposure"
 Assert-That "init wait is bounded" ($wrapperDeployed.Contains('/*fusion:noblock*/') -and $wrapperTemplate.Contains('/*fusion:noblock*/')) -Detail "a stuck chunk callback cannot hang the init"
-foreach ($c3Name in @('C3: nav render guard', 'C3b: exposure scan guard', 'C3c: bounded init wait')) {
-    $c3Entry = $report.results | Where-Object { $_.Patch -eq $c3Name } | Select-Object -First 1
-    Assert-That "$c3Name applied in the sandbox" ($c3Entry -and $c3Entry.status -eq 'applied') -Detail $(if ($c3Entry) { $c3Entry.status } else { 'missing entry' })
+foreach ($c3Name in @('C3b: exposure scan guard', 'C3c: bounded init wait')) {
+    $c3bEntry = $report.results | Where-Object { $_.Patch -eq $c3Name } | Select-Object -First 1
+    Assert-That "$c3Name applied in the sandbox" ($c3bEntry -and $c3bEntry.status -eq 'applied') -Detail $(if ($c3bEntry) { "$($c3bEntry.status): $($c3bEntry.detail)" } else { 'missing entry' })
 }
 
-# D2 tabPortal: the lyrics-plus tab bar must never portal into a null host
+# D2 tabPortal: the CLI app tab bar must never portal into a null host
 # (React error #200 replaced the whole view with the fatal dialog).
-$tabBarFixture = [System.IO.File]::ReadAllText((Join-Path $d2Cli "lyrics-plus\TabBar.js"), [System.Text.Encoding]::UTF8)
+$tabBarFixture = [System.IO.File]::ReadAllText((Join-Path $d2Cli "reddit\TabBar.js"), [System.Text.Encoding]::UTF8)
 Assert-That "tab bar portal host is patched" ($tabBarFixture.Contains('/*fusion:tabportal*/') -and $tabBarFixture.Contains('fusionTabHost ? Spicetify.ReactDOM.createPortal(fusionTabContent, fusionTabHost)')) -Detail "never portals into null"
 Assert-That "tab bar keeps the legacy top-bar lookup first" ($tabBarFixture.Contains('const fusionTabHost =') -and $tabBarFixture.Contains('document.querySelector(".main-topBar-topbarContentWrapper") ||')) -Detail "1.2.x behaviour preserved"
 
@@ -546,7 +555,13 @@ $notifySnippets = @(
 foreach ($snippet in $notifySnippets) {
     Assert-That "notify shim carries $snippet" ($wrapperDeployed.Contains($snippet) -and $wrapperTemplate.Contains($snippet)) -Detail "deployed + CLI template"
 }
-Assert-That "upstream enqueueSnackbar branch is untouched" ($wrapperDeployed.Contains('Spicetify.Snackbar.enqueueSnackbar=(l,{variant:h="default",autoHideDuration:y}={})')) -Detail "existing compat branch preserved"
+# The upstream branch is build-specific (l/h/y on 2.45.x, a/p/m on 2.46.x),
+# so assert the relationship instead of the literal: one shim, appended after
+# the untouched upstream branch.
+$upstreamSnackbarAt = $wrapperDeployed.IndexOf('Spicetify.Snackbar.enqueueSnackbar=')
+$fusionNotifyAt = $wrapperDeployed.IndexOf('/*fusion:notify*/')
+$fusionNotifyCount = ([regex]::Matches($wrapperDeployed, [regex]::Escape('/*fusion:notify*/'))).Count
+Assert-That "upstream enqueueSnackbar branch is untouched" ($upstreamSnackbarAt -gt 0 -and $fusionNotifyAt -gt $upstreamSnackbarAt -and $fusionNotifyCount -eq 1) -Detail "single shim appended after the upstream compat branch"
 $c4Entry = $report.results | Where-Object { $_.Patch -eq 'C4: showNotification shim' } | Select-Object -First 1
 Assert-That "C4: showNotification shim applied in the sandbox" ($c4Entry -and $c4Entry.status -eq 'applied') -Detail $(if ($c4Entry) { $c4Entry.status } else { 'missing entry' })
 
@@ -878,7 +893,7 @@ foreach ($script in @('install.ps1', 'fix.ps1', 'custom-apps.ps1', 'fix-marketpl
 }
 
 # ---------------------------------------------------------------------------
-# 9. Curated custom apps (Enhancify / Stats / lyrics-plus)
+# 9. Curated custom apps (Enhancify / Stats / Marketplace)
 # ---------------------------------------------------------------------------
 Write-Step "Verifying the curated custom apps"
 
@@ -907,11 +922,13 @@ Assert-That "custom-apps.* avoid the pre-2.45 multi-value config call" ($oldStyl
 
 # Curated nav set: Enhancify and Statistics are still fetched by custom-apps.*
 # (so their files/patches stay available) but must NOT be enabled - only
-# lyrics-plus + Marketplace land in custom_apps.
+# Marketplace lands in custom_apps. lyrics-plus left the set: Spicetify >= 2.46
+# ships a working lyrics app again, and 2.45.x's copy is what needed the old
+# viewport patches.
 $customPs1Text = [System.IO.File]::ReadAllText((Join-Path $RepoRoot 'custom-apps.ps1'), [System.Text.Encoding]::UTF8)
 $customShText = [System.IO.File]::ReadAllText((Join-Path $RepoRoot 'custom-apps.sh'), [System.Text.Encoding]::UTF8)
-Assert-That "curated enable set is lyrics-plus + marketplace" ($customPs1Text.Contains("@('lyrics-plus', 'marketplace')") -and -not $customPs1Text.Contains("@('Enhancify', 'stats', 'lyrics-plus')")) -Detail "Enhancify / Stats stay disabled"
-Assert-That "curated shell enable set matches" ($customShText.Contains('for app in lyrics-plus marketplace; do') -and -not $customShText.Contains('for app in Enhancify stats lyrics-plus; do')) -Detail "same set on Linux"
+Assert-That "curated enable set is Marketplace only" ($customPs1Text.Contains("@('marketplace')") -and -not $customPs1Text.Contains("'lyrics-plus'") -and -not $customPs1Text.Contains("@('Enhancify'")) -Detail "Enhancify / Stats stay disabled, lyrics-plus no longer curated"
+Assert-That "curated shell enable set matches" ($customShText.Contains('for app in marketplace; do') -and -not $customShText.Contains('for app in lyrics-plus') -and -not $customShText.Contains('for app in Enhancify')) -Detail "same set on Linux"
 
 # Windows PowerShell 5.1 cannot parse `(if (..) {..} else {..})` as an
 # expression; the published scripts must stay runnable from `iwr | iex` on 5.1.
@@ -925,7 +942,7 @@ $previousEap = $ErrorActionPreference
 $env:SPICETIFY_CONFIG = $uiConfig
 $ErrorActionPreference = 'Continue'
 try {
-    foreach ($app in @('Enhancify', 'stats', 'lyrics-plus')) {
+    foreach ($app in @('Enhancify', 'stats', 'reddit')) {
         & $spicetifyExe config custom_apps $app | Out-Null
     }
     $listed = (& $spicetifyExe config custom_apps 2>&1 |
@@ -937,7 +954,7 @@ finally {
     $ErrorActionPreference = $previousEap
 }
 $listed = $listed.Trim()
-$missing = @('Enhancify', 'stats', 'lyrics-plus') | Where-Object { $listed -notmatch [regex]::Escape($_) }
+$missing = @('Enhancify', 'stats', 'reddit') | Where-Object { $listed -notmatch [regex]::Escape($_) }
 Assert-That "per-item config calls append every value (real CLI)" ($missing.Count -eq 0) -Detail "custom_apps = $listed"
 
 # Real upstream artifacts: the pinned releases the scripts resolve.
@@ -969,7 +986,7 @@ $artifact = [PSCustomObject]@{
     tool            = "tools/verify-offline.ps1"
     timestamp       = (Get-Date).ToString("o")
     spotify         = "1.3.4.258.gc60b10b0946a"
-    spicetify       = "2.45.3"
+    spicetify       = "2.46.4"
     installerSha256 = $installerSha
     xpuiSpaSha256   = $spaSha
     before          = [PSCustomObject]@{ xpui = $beforeXpuiHash; wrapper = $beforeWrapperHash; route = $beforeRouteHash }

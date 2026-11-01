@@ -148,16 +148,27 @@ if (-not $NoStop) {
         Start-Sleep -Milliseconds 800
     }
 }
-$xpuiJs = Join-Path $SpotifyAppsDir "xpui.js"
+# The client entry bundle moved: Spotify <= 1.3.4 ships a single xpui.js, while
+# 1.3.6+ splits it into xpui-modules.js (the app shell) plus per-feature files.
+# Whichever exists is the one that carries the nav/registry/remote-config code
+# these patches target.
+$clientBundleNames = @("xpui.js", "xpui-modules.js")
+$xpuiJs = $null
+foreach ($bundleName in $clientBundleNames) {
+    $candidate = Join-Path $SpotifyAppsDir $bundleName
+    if (Test-Path $candidate) { $xpuiJs = $candidate; break }
+}
 $wrapperJs = Join-Path $SpotifyAppsDir "helper\spicetifyWrapper.js"
 $indexHtml = Join-Path $SpotifyAppsDir "index.html"
 
-if (-not (Test-Path $xpuiJs)) {
-    Write-Log "[-] Spotify xpui.js not found at: $xpuiJs" "Red"
+if (-not $xpuiJs) {
+    Write-Log "[-] Spotify client bundle not found in: $SpotifyAppsDir" "Red"
+    Write-Log "    Looked for: $($clientBundleNames -join ', ')" "Yellow"
     Write-Log "    Please run 'spicetify apply' or 'spicetify backup apply' first." "Yellow"
     $host.SetShouldExit(1)
     return
 }
+$clientBundleLeaf = Split-Path $xpuiJs -Leaf
 
 # Detect Spotify version and architecture
 $detectedVersion = "unknown"
@@ -214,8 +225,8 @@ else {
     Add-Result -Patch "A: snapshot casing" -Status not-needed -Detail "no V8_context_snapshot*.bin present"
 }
 
-# SECTION B: Patch xpui.js
-Write-Log "[*] Inspecting and patching xpui.js..." "Cyan"
+# SECTION B: Patch the client entry bundle (xpui.js / xpui-modules.js)
+Write-Log "[*] Inspecting and patching $clientBundleLeaf..." "Cyan"
 $xpuiPatched = $false
 
 # B1: Remove corrupted legacy snackbar injection (Spicetify < 2.45 semver bug)
@@ -287,10 +298,11 @@ foreach ($patch in $clientPatches) {
 # B2b: apply the same fallbacks to Spicetify's staging copies, so the next
 # `spicetify apply` re-emits them into the client instead of undoing them.
 $navStaged = 0
-$navStagingPaths = @(
-    (Join-Path $env:APPDATA "spicetify\Extracted\Raw\xpui\xpui.js"),
-    (Join-Path $env:APPDATA "spicetify\Extracted\Themed\xpui\xpui.js")
-)
+$navStagingPaths = @()
+foreach ($bundleName in $clientBundleNames) {
+    $navStagingPaths += (Join-Path $env:APPDATA "spicetify\Extracted\Raw\xpui\$bundleName")
+    $navStagingPaths += (Join-Path $env:APPDATA "spicetify\Extracted\Themed\xpui\$bundleName")
+}
 foreach ($stagingPath in $navStagingPaths) {
     if (-not (Test-Path $stagingPath)) { continue }
     $stagingContent = [System.IO.File]::ReadAllText($stagingPath, [System.Text.Encoding]::UTF8)
@@ -354,7 +366,11 @@ else {
     foreach ($app in $customAppBundles) {
         $bundleName = "spicetify-routes-$app"
         $nameKey = '"' + $bundleName + '"'
-        $alreadyMapped = $xpuiContent.Contains(":" + $nameKey)
+        # 1.3.6+ drops the numeric .u map: the client loads named chunks through
+        # `i.e("spicetify-routes-<app>")`, so an existing reference already means
+        # the route is registered.
+        $nativeNamedRef = [regex]::IsMatch($xpuiContent, '\.e\(\s*' + [regex]::Escape($nameKey) + '\s*\)')
+        $alreadyMapped = $xpuiContent.Contains(":" + $nameKey) -or $nativeNamedRef
 
         if (-not $alreadyMapped) {
             $entry = "$appId`:$nameKey,"
@@ -401,10 +417,10 @@ else {
 
 if ($xpuiPatched) {
     [System.IO.File]::WriteAllText($xpuiJs, $xpuiContent, (New-Object System.Text.UTF8Encoding($false)))
-    Write-Log "[SUCCESS] xpui.js successfully patched!" "Green"
+    Write-Log "[SUCCESS] $clientBundleLeaf successfully patched!" "Green"
 }
 else {
-    Write-Log "[INFO] xpui.js needs no patches on this build." "Cyan"
+    Write-Log "[INFO] $clientBundleLeaf needs no patches on this build." "Cyan"
 }
 
 # SECTION C: Patch helper/spicetifyWrapper.js - the copy deployed in the client
@@ -440,6 +456,7 @@ $c2Clean = 0
 $c2Unknown = 0
 $c3Applied = 0
 $c3Clean = 0
+$c3Native = 0
 $c3Unknown = 0
 $c3ScanApplied = 0
 $c3ScanClean = 0
@@ -518,6 +535,11 @@ foreach ($wrapperPath in ($WrapperFiles | Select-Object -Unique)) {
     #   on demand from the already-loaded module map, (b) arms a bounded
     #   re-render retry, and (c) keeps the native hook call unconditional.
     $navLinkAnchor = 'Spicetify._renderNavLinks=(e,t)=>{'
+    # Spicetify 2.46.0 replaced the hook call with a component (vt) that gates on
+    # ReactComponent/Platform readiness and null-guards Spicetify.React itself,
+    # so the hook-order failure this guard existed for cannot happen there; the
+    # old shapes below are kept for wrappers shipped before 2.46.0.
+    $navNativeAnchor = 'Spicetify._renderNavLinks=(e,t)=>Spicetify.React?.createElement'
     $navGuardOld = 'Spicetify._renderNavLinks=(e,t)=>{if(!Spicetify.React||!Spicetify.React.useReducer)return null;/*fusion:navlinks*/'
     $navGuardNew = (@'
 Spicetify._fusionBindReact=function(){/*fusion:reactbind*/try{if(Spicetify.React&&Spicetify.React.useReducer)return true;var g=window.rspackChunk||window.rspackChunkclient_web||window.webpackChunkclient_web;if(!g||typeof g.push!=="function"||g.push===Array.prototype.push)return false;var n=Spicetify.__fusionRequire;if(!n){n=g.push([[Symbol()],{},function(m){return m}]);if(typeof n!=="function")return false;Spicetify.__fusionRequire=n;}if(!n.m)return false;var f=null;for(var k in n.m){if(!Object.prototype.hasOwnProperty.call(n.m,k))continue;var ex=null;try{ex=n(k)}catch(_){continue}if(ex&&ex.useMemo){f=ex;break}}if(f){Spicetify.React=f;return true}}catch(_){}return !!(Spicetify.React&&Spicetify.React.useReducer);};
@@ -527,6 +549,9 @@ Spicetify._renderNavLinks=(e,t)=>{if(!Spicetify.React||!Spicetify.React.useReduc
 '@).TrimEnd()
     if ($wrapContent.Contains('/*fusion:reactbind*/')) {
         $c3Clean++
+    }
+    elseif ($wrapContent.Contains($navNativeAnchor)) {
+        $c3Native++
     }
     elseif ($wrapContent.Contains($navGuardOld)) {
         $wrapContent = $wrapContent.Replace($navGuardOld, $navGuardNew)
@@ -545,13 +570,16 @@ Spicetify._renderNavLinks=(e,t)=>{if(!Spicetify.React||!Spicetify.React.useReduc
     # C3b: one not-yet-installed module must not abort the whole exposure scan
     #   ("Cannot read properties of undefined (reading 'call')" left
     #   Spicetify.ReactComponent at a single key, so the nav never mounted).
-    $scanOld = 'Object.keys(e.m).map(u=>e(u))'
-    $scanNew = 'Object.keys(e.m).map(u=>{try{return e(u)}catch(x){return null}})/*fusion:scan*/'
+    # The module scan is written as Object.keys(e.m).map(<name>=>e(<name>)) with
+    # a build-specific identifier, so match it structurally instead of pinning
+    # the name (u on 2.45.x, d on 2.46.x).
+    $scanPattern = 'Object\.keys\(e\.m\)\.map\(([\w$]+)=>e\(\1\)\)'
+    $scanReplacement = 'Object.keys(e.m).map($1=>{try{return e($1)}catch(x){return null}})/*fusion:scan*/'
     if ($wrapContent.Contains('/*fusion:scan*/')) {
         $c3ScanClean++
     }
-    elseif ($wrapContent.Contains($scanOld)) {
-        $wrapContent = $wrapContent.Replace($scanOld, $scanNew)
+    elseif ([regex]::IsMatch($wrapContent, $scanPattern)) {
+        $wrapContent = [regex]::Replace($wrapContent, $scanPattern, $scanReplacement, 1)
         $wrapPatched = $true
         $c3ScanApplied++
     }
@@ -561,13 +589,15 @@ Spicetify._renderNavLinks=(e,t)=>{if(!Spicetify.React||!Spicetify.React.useReduc
 
     # C3c: a stuck "all chunks loaded" callback must not hang the init forever
     #   (no ReactComponent exposure -> no nav entries in that session).
-    $waitOld = 'await M(()=>a,100),console.log("[spicetifyWrapper] All required webpack modules loaded")'
-    $waitNew = 'await Promise.race([M(()=>a,100),new Promise(function(r){setTimeout(r,4000)})]),/*fusion:noblock*/console.log("[spicetifyWrapper] All required webpack modules loaded")'
+    # The chunk-callback wait recurses until the flag flips, with no deadline
+    # (helper name b on 2.46.x, M on 2.45.x), so match the call shape.
+    $waitPattern = 'await ([\w$]+)\(\(\)=>([\w$]+),100\),console\.log\("\[spicetifyWrapper\] All required webpack modules loaded"\)'
+    $waitReplacement = 'await Promise.race([$1(()=>$2,100),new Promise(function(fusionWait){setTimeout(fusionWait,4000)})]),/*fusion:noblock*/console.log("[spicetifyWrapper] All required webpack modules loaded")'
     if ($wrapContent.Contains('/*fusion:noblock*/')) {
         $c3WaitClean++
     }
-    elseif ($wrapContent.Contains($waitOld)) {
-        $wrapContent = $wrapContent.Replace($waitOld, $waitNew)
+    elseif ([regex]::IsMatch($wrapContent, $waitPattern)) {
+        $wrapContent = [regex]::Replace($wrapContent, $waitPattern, $waitReplacement, 1)
         $wrapPatched = $true
         $c3WaitApplied++
     }
@@ -583,7 +613,14 @@ Spicetify._renderNavLinks=(e,t)=>{if(!Spicetify.React||!Spicetify.React.useReduc
     #   upstream branch is left untouched; this shim only guarantees the method
     #   exists: it prefers whatever the upstream branch assigned, then bridges to
     #   Snackbar.enqueueCustomSnackbar, and silently no-ops on any failure.
-    $notifyAnchor = 'isError=h==="error",Spicetify.showNotification(l,isError,y)}})()'
+    # Upstream writes the compat branch as
+    #   isError=<variant>==="error",Spicetify.showNotification(<msg>,isError,<ms)
+    # inside Spicetify.Snackbar.enqueueSnackbar, with build-specific identifiers
+    # (h/l/y on 2.45.x, p/a/m on 2.46.x). The identifiers and the closing brace
+    # count differ between builds, so locate the branch by offset instead of
+    # pinning a full literal: take the isError assignment, then the `}})()` that
+    # closes the arrow function and the IIFE, and splice the shim in after it.
+    $notifyProbe = 'isError='
     $notifyShim = @'
 ,(function(){/*fusion:notify*/var real=null;function fusionShowNotification(message,isError,duration){try{if(typeof real==="function")return real(message,isError,duration);var S=Spicetify.Snackbar||{};var f=S.enqueueCustomSnackbar;if(typeof f!=="function")return void 0;if(message===null||message===undefined)return void 0;var opts={keyPrefix:"fusion-notify"};if(typeof duration==="number")opts.autoHideDuration=duration;return f.call(S,message,opts)}catch(_){return void 0}}try{var cur=Spicetify.showNotification;if(typeof cur==="function")real=cur;Object.defineProperty(Spicetify,"showNotification",{configurable:true,enumerable:true,get:function(){return typeof real==="function"?real:fusionShowNotification},set:function(v){real=typeof v==="function"?v:null}})}catch(_){try{if(typeof Spicetify.showNotification!=="function")Spicetify.showNotification=fusionShowNotification}catch(__){}}})()
 '@.TrimEnd()
@@ -606,10 +643,26 @@ Spicetify._renderNavLinks=(e,t)=>{if(!Spicetify.React||!Spicetify.React.useReduc
             $c4Unknown++
         }
     }
-    elseif ($wrapContent.Contains($notifyAnchor)) {
-        $wrapContent = $wrapContent.Replace($notifyAnchor, $notifyAnchor + $notifyShim)
-        $wrapPatched = $true
-        $c4Applied++
+    elseif ($wrapContent.Contains($notifyProbe)) {
+        $notifyHit = -1
+        $notifyStart = $wrapContent.IndexOf($notifyProbe)
+        while ($notifyStart -ge 0) {
+            $notifyClose = $wrapContent.IndexOf('}})()', $notifyStart)
+            $notifySpan = $wrapContent.Substring($notifyStart, [Math]::Min(200, $wrapContent.Length - $notifyStart))
+            if ($notifyClose -gt 0 -and ($notifyClose - $notifyStart) -lt 200 -and $notifySpan.Contains('Spicetify.showNotification(')) {
+                $notifyHit = $notifyClose + 5
+                break
+            }
+            $notifyStart = $wrapContent.IndexOf($notifyProbe, $notifyStart + 8)
+        }
+        if ($notifyHit -gt 0) {
+            $wrapContent = $wrapContent.Insert($notifyHit, $notifyShim)
+            $wrapPatched = $true
+            $c4Applied++
+        }
+        else {
+            $c4Unknown++
+        }
     }
     else {
         $c4Unknown++
@@ -649,6 +702,9 @@ if ($c3Applied -gt 0) {
 }
 elseif ($c3Clean -gt 0) {
     Add-Result -Patch "C3: nav render guard" -Status not-needed -Detail "$c3Clean wrapper(s) already patched"
+}
+elseif ($c3Native -gt 0) {
+    Add-Result -Patch "C3: nav render guard" -Status not-needed -Detail "$c3Native wrapper(s) render nav through Spicetify's own guarded component (2.46.0+)"
 }
 else {
     Add-Result -Patch "C3: nav render guard" -Status failed -Detail "_renderNavLinks anchor not found"
@@ -729,12 +785,13 @@ $cliAppsDir = if ($SpicetifyCliAppsDir) { $SpicetifyCliAppsDir } else { Join-Pat
 #   Reload page" dialog - reproducible by switching between the extra apps in
 #   the left sidebar. Every patch below keeps the legacy selector first (1.2.x
 #   behaviour is untouched) and appends the 1.3.x fallback / null guard.
-# The lyrics-plus / reddit tab bar portals into the 1.2.x top-bar container
-#   (.main-topBar-topbarContentWrapper). On 1.3.x that lookup is null and
-#   ReactDOM.createPortal(children, null) throws React error #200, so the whole
-#   view is replaced by the fatal dialog as soon as the lyrics entry is opened.
-#   Keep the legacy lookup first, fall back to the page content and never portal
-#   into a null host.
+# The tab bar shipped with Spicetify's optional CLI apps (reddit) portals into
+#   the 1.2.x top-bar container (.main-topBar-topbarContentWrapper). On 1.3.x
+#   that lookup is null and ReactDOM.createPortal(children, null) throws React
+#   error #200, so the whole view is replaced by the fatal dialog as soon as the
+#   entry is opened. Keep the legacy lookup first, fall back to the page content
+#   and never portal into a null host. lyrics-plus is not part of the curated
+#   set anymore; Spicetify >= 2.46 fixes its own TabBar upstream.
 $tab = [char]9
 $tabPortalOld = (@(
         'const TabBarContext = ({ children }) => {'
@@ -778,24 +835,6 @@ $appPatchSet = @{
         Old2   = '(document.querySelector(".main-topBar-topbarContentWrapper") || document.querySelector("#global-nav-bar .custom-navlinks-scrollable_container") || document.querySelector("#global-nav-bar") || document.body)/*fusion:topbar*/'
         New    = '(document.querySelector(".main-topBar-topbarContentWrapper") || document.querySelector(".main-view-container__scroll-node") || document.querySelector(".main-view-container") || document.querySelector("#main") || document.body)/*fusion:topbar*/'
     }
-    'viewportChain' = @{
-        Name   = 'D2: lyrics-plus main-view selectors'
-        Marker = '/*fusion:vp*/'
-        Old    = 'document.querySelector(".Root__main-view .os-viewport") ?? document.querySelector(".Root__main-view .main-view-container__scroll-node")'
-        New    = 'document.querySelector(".main-view-container__scroll-node") ?? document.querySelector(".main-view-container") ?? document.body/*fusion:vp*/'
-    }
-    'viewportField' = @{
-        Name   = 'D2: lyrics-plus viewport field'
-        Marker = '(document.querySelector(".main-view-container .os-viewport") ?? document.querySelector(".main-view-container__scroll-node") ?? document.body)'
-        Old    = 'document.querySelector(".main-view-container .os-viewport")'
-        New    = '(document.querySelector(".main-view-container .os-viewport") ?? document.querySelector(".main-view-container__scroll-node") ?? document.body)'
-    }
-    'offsetTop' = @{
-        Name   = 'D2: lyrics-plus main-view offset'
-        Marker = '?? document.querySelector(".main-view-container") ?? document.body).offsetTop'
-        Old    = 'document.querySelector(".Root__main-view").offsetTop'
-        New    = '((document.querySelector(".Root__main-view") ?? document.querySelector(".main-view-container") ?? document.body).offsetTop)'
-    }
     'resizeSel' = @{
         Name   = 'D2: app resize-host selector'
         Marker = '.main-view-container__scroll-node, .main-view-container"'
@@ -831,12 +870,9 @@ $appPatchSet = @{
 $appTargets = @(
     @{ Path = (Join-Path $userAppsDir 'stats\index.js'); Patches = @('topbar') },
     @{ Path = (Join-Path $userAppsDir 'marketplace\index.js'); Patches = @('topbar') },
-    @{ Path = (Join-Path $cliAppsDir 'lyrics-plus\index.js'); Patches = @('topbar', 'viewportChain', 'viewportField', 'offsetTop') },
-    @{ Path = (Join-Path $cliAppsDir 'lyrics-plus\TabBar.js'); Patches = @('resizeSel', 'resizeInit', 'resizeHandler', 'observe', 'tabPortal') },
     @{ Path = (Join-Path $cliAppsDir 'reddit\TabBar.js'); Patches = @('resizeSel', 'resizeInit', 'resizeHandler', 'observe', 'tabPortal') },
     @{ Path = (Join-Path $SpotifyAppsDir 'spicetify-routes-stats.js'); Patches = @('topbar') },
-    @{ Path = (Join-Path $SpotifyAppsDir 'spicetify-routes-marketplace.js'); Patches = @('topbar') },
-    @{ Path = (Join-Path $SpotifyAppsDir 'spicetify-routes-lyrics-plus.js'); Patches = @('topbar', 'viewportChain', 'viewportField', 'offsetTop', 'resizeSel', 'resizeInit', 'resizeHandler', 'observe', 'tabPortal') }
+    @{ Path = (Join-Path $SpotifyAppsDir 'spicetify-routes-marketplace.js'); Patches = @('topbar') }
 )
 
 $appPatchStats = @{}
@@ -1000,7 +1036,6 @@ $fusionNavIconAttr = 'viewBox="0 0 16 16" width="24" height="24" fill="currentCo
 $fusionNavIcons = @{
     'marketplace' = '<svg role="img" aria-hidden="true" ' + $fusionNavIconAttr + '><path d="M9 1v6h6V1H9zm5 5h-4V2h4v4zM.999 7h6V1h-6v6zM2 2h4v4H2V2zm7 13h6V9H9v6zm1-5h4v4h-4v-4zM.999 15h6V9h-6v6zM2 10h4v4H2v-4z"/></svg>'
     'stats' = '<svg role="img" aria-hidden="true" ' + $fusionNavIconAttr + '><path d="M.999 15h2V5h-2v10zm4 0h2V1h-2v14zM9 15h2v-4H9v4zm4-7v7h2V8h-2z"/></svg>'
-    'lyrics-plus' = '<svg role="img" aria-hidden="true" ' + $fusionNavIconAttr + '><path d="M8.5 1A4.505 4.505 0 004 5.5c0 .731.191 1.411.502 2.022L1.99 13.163a1.307 1.307 0 00.541 1.666l.605.349a1.307 1.307 0 001.649-.283L9.009 9.95C11.248 9.692 13 7.807 13 5.5 13 3.019 10.981 1 8.5 1zM4.023 14.245a.307.307 0 01-.388.066l-.605-.349a.309.309 0 01-.128-.393l2.26-5.078A4.476 4.476 0 007.715 9.92l-3.692 4.325zM8.5 9C6.57 9 5 7.43 5 5.5S6.57 2 8.5 2 12 3.57 12 5.5 10.429 9 8.5 9z"/></svg>'
     'Enhancify' = '<svg role="img" aria-hidden="true" ' + $fusionNavIconAttr + '><path d="M11.777.972c-.364 1.054-1.195 2.322-2.798 2.83-.115.036-.115.36 0 .396 1.603.508 2.434 1.775 2.798 2.83.04.114.406.114.446 0 .364-1.055 1.195-2.322 2.798-2.83.115-.036.115-.36 0-.396-1.603-.508-2.434-1.776-2.798-2.83-.04-.114-.406-.114-.446 0zM5.295 4.5a.75.75 0 01.747.682c.06.65.334 1.68.954 2.572.606.87 1.527 1.596 2.927 1.75a.75.75 0 010 1.491c-1.4.154-2.321.88-2.927 1.751a5.683 5.683 0 00-.954 2.572.75.75 0 01-1.493 0 5.683 5.683 0 00-.954-2.572c-.606-.87-1.527-1.597-2.927-1.75a.75.75 0 010-1.492c1.4-.154 2.321-.88 2.927-1.75.62-.892.894-1.922.954-2.572a.75.75 0 01.746-.682z"/></svg>'
 }
 

@@ -4,9 +4,8 @@
 # Upstream: https://github.com/ZGQ-inc/spotx-spicetify-fusion (MIT)
 #
 # Notes on the curated set:
-#   - lyrics-plus: ships inside the Spicetify CLI, so it updates with the CLI;
-#                  enabled by default (it is the lyrics nav entry)
 #   - Marketplace : installed/enabled by install.sh; enabled here as well
+#                  (the only enabled entry of the curated nav set)
 #   - Enhancify   : latest upstream release (flat zip -> CustomApps/Enhancify).
 #                  Installed but left disabled: the nav entry is hidden by the
 #                  curated visibility rules in fix.sh/fix.ps1.
@@ -36,7 +35,7 @@ if [ "$(id -u)" -eq 0 ]; then
 fi
 
 echo -e "${CYAN} SpotX + Spicetify Fusion - Custom Apps & Extensions Installer${NC}"
-echo -e "${CYAN} Curated nav set: lyrics-plus + Marketplace; Enhancify / Stats stay hidden${NC}"
+echo -e "${CYAN} Curated nav set: Marketplace only; Enhancify / Stats stay hidden${NC}"
 echo -e "${CYAN} Project: ${FUSION_REPO_URL}${NC}"
 
 export PATH="$HOME/.spicetify:$PATH"
@@ -117,7 +116,8 @@ run_spicetify() {
         echo -e "${YELLOW}  [!] spicetify $* failed${NC}" >&2
     fi
 }
-# Curated nav set: only lyrics-plus and Marketplace are enabled. Enhancify
+# Curated nav set: only Marketplace is enabled (lyrics-plus is no longer part of
+# the set; Spicetify >= 2.46 ships a working lyrics app again if it is wanted). Enhancify
 # and Stats are still fetched above so their files/patches stay available, but
 # they are intentionally left disabled - their nav entries are not useful in
 # practice and the compatibility hotfix also hides them (run fix.sh with
@@ -125,7 +125,7 @@ run_spicetify() {
 # Spicetify >= 2.45 appends one value per call for list keys; passing several
 # values in one call (the pre-2.45 syntax) makes it treat the extra arguments as
 # config field names and error out, so only the first one would ever be added.
-for app in lyrics-plus marketplace; do
+for app in marketplace; do
     run_spicetify config custom_apps "$app"
 done
 for extension in bookmark.js fullAppDisplay.js keyboardShortcut.js loopyLoop.js popupLyrics.js shuffle+.js trashbin.js webnowplaying.js; do

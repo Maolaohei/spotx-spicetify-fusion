@@ -3,9 +3,8 @@
 # Upstream: https://github.com/ZGQ-inc/spotx-spicetify-fusion (MIT)
 #
 # Notes on the curated set:
-#   - lyrics-plus: ships inside the Spicetify CLI, so it updates with the CLI;
-#                  enabled by default (it is the lyrics nav entry)
 #   - Marketplace : installed/enabled by install.ps1; enabled here as well
+#                  (the only enabled entry of the curated nav set)
 #   - Enhancify   : latest upstream release (flat zip -> CustomApps\Enhancify).
 #                  Installed but left disabled: the nav entry is hidden by the
 #                  curated visibility rules in fix.ps1/fix.sh.
@@ -33,7 +32,7 @@ if ((New-Object Security.Principal.WindowsPrincipal($identity)).IsInRole([Securi
 }
 
 Write-Host " SpotX + Spicetify Fusion - Custom Apps & Extensions Installer" -ForegroundColor Cyan
-Write-Host " Curated nav set: lyrics-plus + Marketplace; Enhancify / Stats stay hidden" -ForegroundColor Cyan
+Write-Host " Curated nav set: Marketplace only; Enhancify / Stats stay hidden" -ForegroundColor Cyan
 Write-Host " Project: $FusionRepoUrl" -ForegroundColor Cyan
 
 $spicetifyBin = "$env:LOCALAPPDATA\spicetify"
@@ -164,7 +163,8 @@ Install-Stats
 
 Write-Host "Configuring Spicetify custom apps and extensions..." -ForegroundColor Yellow
 
-# Curated nav set: only lyrics-plus and Marketplace are enabled. Enhancify
+# Curated nav set: only Marketplace is enabled (lyrics-plus is no longer part of
+# the set; Spicetify >= 2.46 ships a working lyrics app again if it is wanted). Enhancify
 # and Stats are still fetched above so their files/patches stay available, but
 # they are intentionally left disabled - their nav entries are not useful in
 # practice and the compatibility hotfix also hides them (run fix.ps1 with
@@ -172,7 +172,7 @@ Write-Host "Configuring Spicetify custom apps and extensions..." -ForegroundColo
 # Spicetify >= 2.45 appends one value per call for list keys; passing several
 # values in one call (the pre-2.45 syntax) makes it treat the extra arguments as
 # config field names and error out, so only the first one would ever be added.
-foreach ($app in @('lyrics-plus', 'marketplace')) {
+foreach ($app in @('marketplace')) {
     Invoke-SpicetifyConfig @('config', 'custom_apps', $app)
 }
 foreach ($extension in @('bookmark.js', 'fullAppDisplay.js', 'keyboardShortcut.js', 'loopyLoop.js', 'popupLyrics.js', 'shuffle+.js', 'trashbin.js', 'webnowplaying.js')) {
