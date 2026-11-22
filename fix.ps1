@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
     SpotX + Spicetify Unified Compatibility Hotfix Script
-    Supports Spotify 1.2.x (Webpack) and 1.3.x (Rspack, up to 1.3.4)
+    Supports Spotify 1.2.x (Webpack) and 1.3.x (Rspack, up to 1.3.11)
 .DESCRIPTION
     Fixes critical compatibility issues between SpotX and Spicetify.
     Every patch below is probed against the actual bundle first; patches that
@@ -111,7 +111,7 @@ function Insert-AfterFirstMatch {
 }
 
 Write-Log " SpotX + Spicetify Unified Compatibility Hotfix (v2.2)" "Cyan"
-Write-Log " Supports Spotify 1.2.x (Webpack) & 1.3.x+ (Rspack, tested 1.3.4)" "Cyan"
+Write-Log " Supports Spotify 1.2.x (Webpack) & 1.3.x+ (Rspack, tested 1.3.11)" "Cyan"
 Write-Log " GitHub: $FusionRepoUrl" "Cyan"
 
 # Locate Spotify & Spicetify directories
@@ -149,9 +149,9 @@ if (-not $NoStop) {
     }
 }
 # The client entry bundle moved: Spotify <= 1.3.4 ships a single xpui.js, while
-# 1.3.6+ splits it into xpui-modules.js (the app shell) plus per-feature files.
-# Whichever exists is the one that carries the nav/registry/remote-config code
-# these patches target.
+# 1.3.6+ can ship xpui-modules.js (the app shell) plus per-feature files. In the
+# SpotX-first fusion flow SpotX rebuilds the client as xpui.js; whichever exists
+# is the one that carries the nav/registry/remote-config code these patches target.
 $clientBundleNames = @("xpui.js", "xpui-modules.js")
 $xpuiJs = $null
 foreach ($bundleName in $clientBundleNames) {

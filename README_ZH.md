@@ -16,7 +16,7 @@
 >
 > **本仓库是 [ZGQ-inc/spotx-spicetify-fusion](https://github.com/ZGQ-inc/spotx-spicetify-fusion) 的维护分支（fork）**。
 > 下面的安装命令全部指向**本仓库**（https://github.com/Maolaohei/spotx-spicetify-fusion），已适配当前上游版本
-> （Spotify 1.3.4–1.3.6、Spicetify 2.46.4）。上游署名与博客文章作为来源保留。
+> （Spotify 1.3.4–1.3.11、Spicetify 2.46.7）。上游署名与博客文章作为来源保留。
 
 让 **[SpotX](https://github.com/SpotX-Official/SpotX)**（纯净无广告、干掉播客与有声书、音质与布局优化）与 **[Spicetify](https://spicetify.app)**（海量主题定制、JS 扩展、Marketplace 应用商店、开发者生态）实现无缝共存！
 
@@ -117,7 +117,7 @@ bash install.sh --verify-only
 
 ### 离线端到端验证（Windows，不安装）
 
-`tools/verify-offline.ps1` 会用已发布的固定工件把整条流水线重跑一遍：下载固定版本的 Spotify 安装包，仅用 `/extract` 解包到临时沙箱（不写注册表、不产生 `%APPDATA%\Spotify`），用真实 SpotX 给它打补丁，再用 `spicetify -n`（**不会启动客户端**）应用 Spicetify 2.46.4 + Marketplace，最后用 `fix.ps1 -SpotifyDir <沙箱>` 处理，并断言“本来就正确”的 bundle 保持字节不变；同时校验所有脚本横幅、issue 链接与 README 一行命令都指向本仓库，并确认已发布的 raw URL 可访问（共 140 项断言）。结果写入 `verify-out/offline-e2e.json`。
+`tools/verify-offline.ps1` 会用已发布的固定工件把整条流水线重跑一遍：下载固定版本的 Spotify 安装包，仅用 `/extract` 解包到临时沙箱（不写注册表、不产生 `%APPDATA%\Spotify`），用真实 SpotX 给它打补丁，再用 `spicetify -n`（**不会启动客户端**）应用 Spicetify 2.46.7 + Marketplace，最后用 `fix.ps1 -SpotifyDir <沙箱>` 处理，并断言“本来就正确”的 bundle 保持字节不变；同时校验所有脚本横幅、issue 链接与 README 一行命令都指向本仓库，并确认已发布的 raw URL 可访问（共 140 项断言）。结果写入 `verify-out/offline-e2e.json`。
 
 ```powershell
 pwsh tools/verify-offline.ps1
@@ -129,28 +129,29 @@ pwsh tools/verify-offline.ps1
 bash tools/verify-shell-patches.sh
 ```
 
-### 当前验证矩阵（2026-10-11）
+### 当前验证矩阵（2026-11-22）
 
 | 组件 | 版本 | 结果 |
 | :--- | :--- | :--- |
-| Spotify (Windows x64) | `1.3.4.258.gc60b10b0946a`、`1.3.6.1921.g7086c071a617` | 两个版本均已解包、由 SpotX 打补丁、离线验证通过 |
-| SpotX | `main`（版本号已提到 1.3.4） | 原有 15 个参数仍全部可用；Spicetify 拦截提示已消除 |
-| Spicetify CLI | `v2.46.4` | 在 1.3.4 与 1.3.6 上 `backup apply` 均成功；自定义应用由其原生注册 |
+| Spotify (Windows x64) | `1.3.4.258.gc60b10b0946a`、`1.3.6.1921.g7086c071a617`、`1.3.11.2644.gd0bf9a476565` | 三个版本均已解包、由 SpotX 打补丁、离线验证通过；1.3.11 为当前 E2E 固定版本 |
+| SpotX | `main`（版本号已提到 1.3.11） | 原有 15 个参数仍全部可用；Spicetify 拦截提示已消除 |
+| Spicetify CLI | `v2.46.7` | 在 1.3.4、1.3.6 与 1.3.11 上 `backup apply` 均成功；自定义应用由其原生注册 |
 | Marketplace | 最新 release | 路由 bundle、chunk map 与 CSS 白名单均已验证 |
 
-在 **Spotify 1.3.4/1.3.6 + Spicetify 2.46.4** 上，快照文件名大小写（`V8_context_snapshot.bin` -> `v8_context_snapshot.bin`）仍需要，另外还有三条 wrapper 补丁确实要动。
+在 **Spotify 1.3.4/1.3.6/1.3.11 + Spicetify 2.46.7** 上，快照文件名大小写（`V8_context_snapshot.bin` -> `v8_context_snapshot.bin`）仍需要，另外还有四条 wrapper 补丁确实要动。
 
-Spotify 1.3.6 把客户端主 bundle 拆了：`xpui.js` 变成 `xpui-modules.js`（外加各功能路由文件），自定义应用的 chunk 也改成按名字加载（`i.e("spicetify-routes-marketplace")`）而不再用数字 `.u` 表。热修复会按存在的那个 bundle 处理，并把「按名引用」视为已注册，两种布局都覆盖：
+Spotify 1.3.6+ 可能会拆分客户端主 bundle：`xpui.js` 变成 `xpui-modules.js`（外加各功能路由文件）；而在 SpotX 优先的 fusion 流程里，SpotX 会把客户端重建成单个 `xpui.js`。自定义应用的 chunk 按名字加载（`i.e("spicetify-routes-marketplace")`）而不再用数字 `.u` 表。热修复会按实际存在的那个 bundle 处理，并把「按名引用」视为已注册，所有布局都覆盖：
 
-| 补丁 | 2.46.4 上的状态 | 原因 |
+| 补丁 | 2.46.7 上的状态 | 原因 |
 | :--- | :--- | :--- |
-| `C1` rspackChunk hook / `C2` URI 自启动 | `not-needed` | 上游已自行协商 `window.rspackChunk` 并预置 `Spicetify.URI` |
+| `C1` rspackChunk hook | `not-needed` | 上游已自行协商 `window.rspackChunk` |
+| `C2` URI 自启动 | `applied` | wrapper 仍在等待 `Spicetify.URI`，需要主动预置 |
 | `C3` 导航渲染保护 | `not-needed` | 2.46.0 起用自带组件渲染导航入口，内部检查 `ReactComponent`/`Platform` 是否就绪并对 `Spicetify.React` 判空，hook 顺序问题已不存在 |
 | `C3b` 模块扫描保护 | `applied` | 仍未安装的模块依旧会让 `Object.keys(e.m).map(...)` 整体抛错 |
 | `C3c` 初始化等待上限 | `applied` | 等待 chunk 回调的轮询仍是无上限递归 |
-| `C4` showNotification 兜底 | `applied` | 1.3.4 上仍只有 `Snackbar.enqueueCustomSnackbar`、没有 `enqueueSnackbar`，`Spicetify.showNotification` 依然会是 undefined |
+| `C4` showNotification 兜底 | `applied` | 1.3.11 上仍只有 `Snackbar.enqueueCustomSnackbar`、没有 `enqueueSnackbar`，`Spicetify.showNotification` 依然会是 undefined |
 
-其余旧补丁（`useNavigateStable` / `RegistryContext` / chunk map）都会被探测并标记为 `not-needed`（Spicetify 2.45+ 已原生处理 Rspack 自定义应用）。
+旧版守卫（`useNavigateStable`、`RemoteConfig`、`RegistryContext`）会按每个 bundle 的锚点探测，存在就应用；chunk map 则标记为 `not-needed`，因为 Spicetify 2.45+ 已原生处理 Rspack 自定义应用。
 
 ## 🎯 为什么要同时使用 SpotX 和 Spicetify？
 
@@ -162,7 +163,7 @@ Spotify 1.3.6 把客户端主 bundle 拆了：`xpui.js` 变成 `xpui-modules.js`
 | **自定义 CSS / 主题美化** | ❌ 完全不支持 | ✅ 支持海量主题 | ✅ **随心所欲换肤** |
 | **Marketplace 应用市场** | ❌ 无 | ✅ 原生支持 | ✅ **修复完好，正常浏览下载** |
 | **各类高级插件（歌词、统计等）** | ❌ 无 | ✅ 生态繁荣 | ✅ **全部正常运作** |
-| **Spotify 1.3.x Rspack 兼容** | ❌ 假修复导致黑屏 | ❌ 版本判断 Bug 崩溃 | ✅ **全网首发完美运行，零黑屏（已在 1.3.4 验证）** |
+| **Spotify 1.3.x Rspack 兼容** | ❌ 假修复导致黑屏 | ❌ 版本判断 Bug 崩溃 | ✅ **全网首发完美运行，零黑屏（已在 1.3.11 验证）** |
 
 二者结合是 PC 端享受 Spotify 最完美的形态。然而长期以来，由于两边维护者的个人恩怨与互相排斥，用户不仅无法得到官方支持，甚至沦为互相踢皮球的受害者。本项目从根本上终结了这一乱象。
 

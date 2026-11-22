@@ -17,7 +17,7 @@
 > **This is a maintained fork** of [ZGQ-inc/spotx-spicetify-fusion](https://github.com/ZGQ-inc/spotx-spicetify-fusion).
 > Install commands below run the scripts **from this fork** (https://github.com/Maolaohei/spotx-spicetify-fusion), which keep the
 > SpotX / Spicetify flow working with the current upstream releases
-> (Spotify 1.3.4–1.3.6, Spicetify 2.46.4). Upstream credits and blog articles are kept as attribution.
+> (Spotify 1.3.4–1.3.11, Spicetify 2.46.7). Upstream credits and blog articles are kept as attribution.
 
 Seamlessly merge **[SpotX](https://github.com/SpotX-Official/SpotX)** (clean audio ad-blocking, podcast cleaner, visual tweaks) and **[Spicetify](https://spicetify.app)** (custom themes, JavaScript extensions, Marketplace, dev tools) without black screens, missing apps, or broken routes.
 
@@ -136,7 +136,7 @@ was verified against; a changed prompt fails the check loudly.
 `tools/verify-offline.ps1` rebuilds the whole pipeline from shipped artifacts:
 it downloads the pinned Spotify installer, extracts it to a temp sandbox
 (`/extract` only - no registry, no `%APPDATA%\Spotify` client), runs the real
-SpotX against it, applies Spicetify 2.46.4 + Marketplace with `spicetify -n`
+SpotX against it, applies Spicetify 2.46.7 + Marketplace with `spicetify -n`
 (never launches the client), runs `fix.ps1 -SpotifyDir <sandbox>` and asserts
 that an already-correct bundle is left byte-identical. It also verifies that
 every script banner, issue link and README one-liner points at this fork and
@@ -154,36 +154,37 @@ pwsh tools/verify-offline.ps1
 bash tools/verify-shell-patches.sh
 ```
 
-### Verification matrix (2026-10-11)
+### Verification matrix (2026-11-22)
 
 | Component | Version | Result |
 | :--- | :--- | :--- |
-| Spotify (Windows x64) | `1.3.4.258.gc60b10b0946a`, `1.3.6.1921.g7086c071a617` | extracted, SpotX-patched and verified offline on both |
-| SpotX | `main`, version bumped to 1.3.4 | all 15 original flags still accepted; Spicetify guards neutralised |
-| Spicetify CLI | `v2.46.4` | `backup apply` succeeds on 1.3.4 and 1.3.6; custom apps registered natively |
+| Spotify (Windows x64) | `1.3.4.258.gc60b10b0946a`, `1.3.6.1921.g7086c071a617`, `1.3.11.2644.gd0bf9a476565` | extracted, SpotX-patched and verified offline on all three; 1.3.11 is the current E2E pin |
+| SpotX | `main`, version bumped to 1.3.11 | all 15 original flags still accepted; Spicetify guards neutralised |
+| Spicetify CLI | `v2.46.7` | `backup apply` succeeds on 1.3.4, 1.3.6 and 1.3.11; custom apps registered natively |
 | Marketplace | latest release | route bundle, chunk map and CSS allowlist verified |
 
-On **Spotify 1.3.4/1.3.6 + Spicetify 2.46.4** the snapshot filename casing
-(`V8_context_snapshot.bin` -> `v8_context_snapshot.bin`) is still needed, and three
+On **Spotify 1.3.4/1.3.6/1.3.11 + Spicetify 2.46.7** the snapshot filename casing
+(`V8_context_snapshot.bin` -> `v8_context_snapshot.bin`) is still needed, and four
 wrapper patches still have work to do.
 
-Spotify 1.3.6 splits the client bundle: `xpui.js` became `xpui-modules.js` (plus
-per-feature route files), and custom-app chunks are loaded by name
-(`i.e("spicetify-routes-marketplace")`) instead of a numeric `.u` map. The hotfix
-resolves whichever bundle exists and treats a named-chunk reference as already
-registered, so both layouts are covered:
+Spotify 1.3.6+ can split the client bundle: `xpui.js` may become `xpui-modules.js`
+(plus per-feature route files), while the SpotX-first fusion flow rebuilds the
+client as a single `xpui.js`. Custom-app chunks are loaded by name (`i.e("spicetify-routes-marketplace")`)
+instead of a numeric `.u` map. The hotfix resolves whichever bundle exists and
+treats a named-chunk reference as already registered, so every layout is covered:
 
-| Patch | State on 2.46.4 | Why |
+| Patch | State on 2.46.7 | Why |
 | :--- | :--- | :--- |
-| `C1` rspackChunk hook / `C2` URI self-start | `not-needed` | upstream already negotiates `window.rspackChunk` and seeds `Spicetify.URI` |
+| `C1` rspackChunk hook | `not-needed` | upstream already negotiates `window.rspackChunk` |
+| `C2` URI self-start | `applied` | the wrapper still waits for `Spicetify.URI` instead of seeding it |
 | `C3` nav render guard | `not-needed` | 2.46.0 renders nav links through its own component that gates on `ReactComponent`/`Platform` and null-checks `Spicetify.React`, so the hook-order race is gone |
 | `C3b` exposure scan guard | `applied` | a not-yet-installed module still aborts `Object.keys(e.m).map(...)` |
 | `C3c` bounded init wait | `applied` | the chunk-callback poll still recurses without a deadline |
-| `C4` showNotification shim | `applied` | `Snackbar.enqueueSnackbar` still does not exist on 1.3.4 (only `enqueueCustomSnackbar`), so `Spicetify.showNotification` stayed undefined |
+| `C4` showNotification shim | `applied` | `Snackbar.enqueueSnackbar` still does not exist on 1.3.11 (only `enqueueCustomSnackbar`), so `Spicetify.showNotification` stayed undefined |
 
-The rest of the legacy set (`useNavigateStable` / `RegistryContext` / chunk map) is
-probed and reported as `not-needed`, because Spicetify 2.45+ handles Rspack custom
-apps natively.
+The legacy guards (`useNavigateStable`, `RemoteConfig`, `RegistryContext`) are
+probed against each bundle and applied when their anchors exist; the chunk map is
+reported as `not-needed` because Spicetify 2.45+ handles Rspack custom apps natively.
 
 ## 🎯 Why Combine SpotX and Spicetify?
 
@@ -195,7 +196,7 @@ apps natively.
 | **Custom Themes & CSS Injections** | ❌ None | ✅ Unlimited | ✅ **Unlimited Themes** |
 | **Marketplace (App Store for Spotify)** | ❌ None | ✅ Full Access | ✅ **Restored & Working** |
 | **Extensions (Popup Lyrics, Stats, etc.)** | ❌ None | ✅ Huge Ecosystem | ✅ **Fully Compatible** |
-| **Spotify 1.3.x Rspack Support** | ❌ Blackscreen Bug | ❌ SyntaxError Crash | ✅ **Zero Crash / Fixed (verified on 1.3.4)** |
+| **Spotify 1.3.x Rspack Support** | ❌ Blackscreen Bug | ❌ SyntaxError Crash | ✅ **Zero Crash / Fixed (verified on 1.3.11)** |
 
 Combining both gives you the **ultimate Spotify PC desktop experience**. Unfortunately, due to personal feuds and conflicting patch logic between their maintainers, users were left stranded. This repository fixes that once and for all.
 

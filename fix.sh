@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SpotX + Spicetify Unified Compatibility Hotfix Script (Linux Edition)
-# Supports Spotify 1.2.x (Webpack) & 1.3.x+ (Rspack, tested 1.3.4)
+# Supports Spotify 1.2.x (Webpack) & 1.3.x+ (Rspack, tested 1.3.11)
 # Project: https://github.com/Maolaohei/spotx-spicetify-fusion
 # Upstream: https://github.com/ZGQ-inc/spotx-spicetify-fusion (MIT)
 #
@@ -29,7 +29,7 @@ if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
 fi
 
 echo -e "${CYAN} SpotX + Spicetify Unified Compatibility Hotfix (Linux v2.2)   ${NC}"
-echo -e "${CYAN} Supports Spotify 1.2.x (Webpack) & 1.3.x+ (Rspack, tested 1.3.4) ${NC}"
+echo -e "${CYAN} Supports Spotify 1.2.x (Webpack) & 1.3.x+ (Rspack, tested 1.3.11) ${NC}"
 echo -e "${CYAN} GitHub: ${FUSION_REPO_URL}            ${NC}"
 
 # Terminate running Spotify processes
@@ -266,8 +266,9 @@ if not os.environ.get("KEEP_ENGLISH"):
         translate_helpers(template_dir)
 
 for xpui_dir in target_dirs:
-    # The client entry bundle moved in Spotify 1.3.6: xpui.js became
-    # xpui-modules.js plus per-feature files. Patch whichever one exists.
+    # The client entry bundle moved in Spotify 1.3.6: it can ship xpui-modules.js
+    # plus per-feature files, while the SpotX-first flow rebuilds xpui.js. Patch
+    # whichever one exists.
     xpui_js = None
     for _bundle_name in ("xpui.js", "xpui-modules.js"):
         _bundle_candidate = os.path.join(xpui_dir, _bundle_name)

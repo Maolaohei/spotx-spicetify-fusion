@@ -5,10 +5,10 @@
     Rebuilds the whole fusion pipeline from shipped artifacts, without
     installing Spotify on the machine:
 
-      1. download the pinned Spotify 1.3.4 installer and verify its SHA-256,
+      1. download the pinned Spotify 1.3.11 installer and verify its SHA-256,
       2. run the real SpotX run.ps1 against an extracted client sandbox
          (-SpotifyPath, no install, no shortcut, no registry writes),
-      3. install Spicetify 2.46.4 (portable, SPICETIFY_CONFIG points at a temp
+      3. install Spicetify 2.46.7 (portable, SPICETIFY_CONFIG points at a temp
          dir) and run `spicetify -n backup apply` with the Marketplace custom
          app (-n keeps the sandbox client from being launched),
       4. run fix.ps1 -SpotifyDir <sandbox> -ReportPath <artifact>,
@@ -50,10 +50,10 @@ if (-not $CacheDir) { $CacheDir = Join-Path $RepoRoot ".cache\verify-offline" }
 if (-not $OutDir) { $OutDir = Join-Path $RepoRoot "verify-out" }
 New-Item -ItemType Directory -Force -Path $CacheDir, $OutDir | Out-Null
 
-$SpotifySetupUrl = "https://loadspot.amd64fox1.workers.dev/download/spotify_installer-1.3.4.258.gc60b10b0946a-x64.exe"
-$SpotifySetupSize = 156864632
-$XpuiSpaSha256 = "19be39b9f8da51a5e766699bc0e7a8bf6dc6f09b1b733a2d8feb4cb2e1ce0608"
-$SpicetifyZipUrl = "https://github.com/spicetify/cli/releases/download/v2.46.4/spicetify-2.46.4-windows-x64.zip"
+$SpotifySetupUrl = "https://loadspot.amd64fox1.workers.dev/download/spotify_installer-1.3.11.2644.gd0bf9a476565-x64.exe"
+$SpotifySetupSize = 161439728
+$XpuiSpaSha256 = "43f572824247b19a3690227b5ea951492de9011cf598cedc1b50c8f24ed085d0"
+$SpicetifyZipUrl = "https://github.com/spicetify/cli/releases/download/v2.46.7/spicetify-2.46.7-windows-x64.zip"
 $MarketplaceZipUrl = "https://github.com/spicetify/marketplace/releases/latest/download/marketplace.zip"
 
 $Assertions = New-Object System.Collections.Generic.List[object]
@@ -231,8 +231,8 @@ if ($realAppExisted -or $realLocalExisted) {
 # 1. Artifacts
 # ---------------------------------------------------------------------------
 Write-Step "Fetching pinned artifacts"
-$installer = Get-DownloadedFile -Url $SpotifySetupUrl -Path (Join-Path $CacheDir "SpotifySetup-1.3.4.exe") -ExpectedSize $SpotifySetupSize -Name "Spotify 1.3.4 installer"
-$spicetifyZip = Get-DownloadedFile -Url $SpicetifyZipUrl -Path (Join-Path $CacheDir "spicetify-2.46.4-windows-x64.zip") -Name "Spicetify 2.46.4"
+$installer = Get-DownloadedFile -Url $SpotifySetupUrl -Path (Join-Path $CacheDir "SpotifySetup-1.3.11.exe") -ExpectedSize $SpotifySetupSize -Name "Spotify 1.3.11 installer"
+$spicetifyZip = Get-DownloadedFile -Url $SpicetifyZipUrl -Path (Join-Path $CacheDir "spicetify-2.46.7-windows-x64.zip") -Name "Spicetify 2.46.7"
 $marketplaceZip = Get-DownloadedFile -Url $MarketplaceZipUrl -Path (Join-Path $CacheDir "marketplace.zip") -Name "Marketplace release"
 $installerSha = Get-FileHash256 $installer
 Assert-That "Spotify installer size/hash pinned" ((Get-Item $installer).Length -eq $SpotifySetupSize) -Detail "sha256 $installerSha"
@@ -244,7 +244,7 @@ New-Item -ItemType Directory -Force -Path $work | Out-Null
 # ---------------------------------------------------------------------------
 # 2. Extract the real client and run the real SpotX against it
 # ---------------------------------------------------------------------------
-Write-Step "Extracting Spotify 1.3.4 (no install)"
+Write-Step "Extracting Spotify 1.3.11 (no install)"
 $extracted = Join-Path $work "client"
 New-Item -ItemType Directory -Force -Path $extracted | Out-Null
 $appInstallBefore = Get-InstallFingerprint
@@ -254,7 +254,7 @@ Assert-That "extraction leaves a real Spotify install untouched" ((Get-InstallFi
 
 $xpuiSpa = Join-Path $extracted "Apps\xpui.spa"
 $spaSha = Get-FileHash256 $xpuiSpa
-Assert-That "xpui.spa matches the pinned 1.3.4 hash" ($spaSha -eq $XpuiSpaSha256) -Detail "sha256 $spaSha"
+Assert-That "xpui.spa matches the pinned 1.3.11 hash" ($spaSha -eq $XpuiSpaSha256) -Detail "sha256 $spaSha"
 
 Write-Step "Running the current SpotX against the sandbox (-SpotifyPath)"
 $spotxScript = Get-DownloadedFile -Url "https://raw.githubusercontent.com/SpotX-Official/SpotX/main/run.ps1" -Path (Join-Path $CacheDir "run_spotx.ps1") -Name "SpotX run.ps1"
@@ -299,13 +299,13 @@ $spaEntries = & {
 Assert-That "SpotX rebuilt xpui.js inside xpui.spa" ($spaEntries -contains "xpui.js") -Detail "rspack bundle present"
 
 # ---------------------------------------------------------------------------
-# 3. Spicetify 2.46.4 + Marketplace, fully portable
+# 3. Spicetify 2.46.7 + Marketplace, fully portable
 # ---------------------------------------------------------------------------
-Write-Step "Applying Spicetify 2.46.4 + Marketplace in the sandbox"
+Write-Step "Applying Spicetify 2.46.7 + Marketplace in the sandbox"
 $spicetifyDir = Join-Path $work "spicetify"
 Expand-Zip -Zip $spicetifyZip -Destination $spicetifyDir
 $spicetifyExe = Join-Path $spicetifyDir "spicetify.exe"
-Assert-That "spicetify.exe extracted" (Test-Path $spicetifyExe) -Detail "v2.46.4 windows-x64"
+Assert-That "spicetify.exe extracted" (Test-Path $spicetifyExe) -Detail "v2.46.7 windows-x64"
 
 $spConfig = Join-Path $work "sp-config"
 New-Item -ItemType Directory -Force -Path (Join-Path $spConfig "CustomApps") | Out-Null
@@ -318,7 +318,7 @@ Get-ChildItem -Path (Join-Path $marketTmp "marketplace-dist") -Force | ForEach-O
 }
 
 # Spicetify reads the Spotify version from the client's prefs file.
-Set-Content -Path (Join-Path $extracted "prefs") -Value 'app.last-launched-version="1.3.4.258.gc60b10b0946a"' -Encoding ASCII
+Set-Content -Path (Join-Path $extracted "prefs") -Value 'app.last-launched-version="1.3.11.2644.gd0bf9a476565"' -Encoding ASCII
 
 $previousConfig = $env:SPICETIFY_CONFIG
 $previousEap = $ErrorActionPreference
@@ -337,7 +337,7 @@ finally {
     $env:SPICETIFY_CONFIG = $previousConfig
     $ErrorActionPreference = $previousEap
 }
-Assert-That "spicetify backup apply exit code 0" ($applyExit -eq 0) -Detail "Spicetify 2.46.4 on Spotify 1.3.4"
+Assert-That "spicetify backup apply exit code 0" ($applyExit -eq 0) -Detail "Spicetify 2.46.7 on Spotify 1.3.11"
 Assert-That "real install untouched by the whole run (%APPDATA%)" ((Get-InstallFingerprint) -eq $appInstallBefore) -Detail $(if ($realAppExisted) { '%APPDATA%\Spotify files unchanged' } else { 'no %APPDATA%\Spotify created' })
 Assert-That "no real Spotify runtime dir created (%LOCALAPPDATA%)" ($realLocalExisted -or -not (Test-Path $realLocalSpotify)) -Detail $(if ($realLocalExisted) { 'pre-existing, untouched' } else { 'no %LOCALAPPDATA%\Spotify created' })
 if (-not $realAppExisted -and (Test-Path $realAppSpotify)) { Remove-Item $realAppSpotify -Recurse -Force -ErrorAction SilentlyContinue }
@@ -543,7 +543,7 @@ Assert-That "tab bar portal host is patched" ($tabBarFixture.Contains('/*fusion:
 Assert-That "tab bar keeps the legacy top-bar lookup first" ($tabBarFixture.Contains('const fusionTabHost =') -and $tabBarFixture.Contains('document.querySelector(".main-topBar-topbarContentWrapper") ||')) -Detail "1.2.x behaviour preserved"
 
 # C4: Spicetify.showNotification must exist and never throw. The upstream compat
-# loop only waits for Snackbar.enqueueSnackbar (absent on 1.3.4), so the wrapper
+# loop only waits for Snackbar.enqueueSnackbar (absent on 1.3.11), so the wrapper
 # installs a defensive shim that bridges to Snackbar.enqueueCustomSnackbar.
 $notifySnippets = @(
     '/*fusion:notify*/',
@@ -985,8 +985,8 @@ Write-Step "Writing artifact"
 $artifact = [PSCustomObject]@{
     tool            = "tools/verify-offline.ps1"
     timestamp       = (Get-Date).ToString("o")
-    spotify         = "1.3.4.258.gc60b10b0946a"
-    spicetify       = "2.46.4"
+    spotify         = "1.3.11.2644.gd0bf9a476565"
+    spicetify       = "2.46.7"
     installerSha256 = $installerSha
     xpuiSpaSha256   = $spaSha
     before          = [PSCustomObject]@{ xpui = $beforeXpuiHash; wrapper = $beforeWrapperHash; route = $beforeRouteHash }

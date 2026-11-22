@@ -1,5 +1,5 @@
 # SpotX + Spicetify All-in-One Automated Installer (Windows Edition)
-# Supports Spotify 1.2.x & 1.3.x (Rspack, tested 1.3.4)
+# Supports Spotify 1.2.x & 1.3.x (Rspack, tested 1.3.11)
 # Project: https://github.com/Maolaohei/spotx-spicetify-fusion
 # Upstream: https://github.com/ZGQ-inc/spotx-spicetify-fusion (MIT)
 # Telegram (upstream community): https://t.me/ZGQinc
@@ -168,7 +168,7 @@ if ($VerifyOnly) {
 
 Write-Host " SpotX + Spicetify All-in-One Automated Installer" -ForegroundColor Cyan
 Write-Host " GitHub: $FusionRepoUrl" -ForegroundColor Cyan
-Write-Host " Supports Spotify 1.2.x & 1.3.x (Rspack)" -ForegroundColor Cyan
+Write-Host " Supports Spotify 1.2.x & 1.3.x (Rspack, tested 1.3.11)" -ForegroundColor Cyan
 
 # --------------------------------------------------------------------------
 # 1. Install / Update Spotify with SpotX

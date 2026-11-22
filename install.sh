@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SpotX + Spicetify All-in-One Automated Installer (Linux Edition)
-# Supports Spotify 1.2.x & 1.3.x (Rspack, tested 1.3.4)
+# Supports Spotify 1.2.x & 1.3.x (Rspack, tested 1.3.11)
 # Project: https://github.com/Maolaohei/spotx-spicetify-fusion
 # Upstream: https://github.com/ZGQ-inc/spotx-spicetify-fusion (MIT)
 # Telegram (upstream community): https://t.me/ZGQinc
@@ -61,7 +61,7 @@ check() {
 }
 
 echo -e "${CYAN} SpotX + Spicetify All-in-One Automated Installer (Linux)       ${NC}"
-echo -e "${CYAN} Supports Spotify 1.2.x & 1.3.x (Rspack Architecture, tested 1.3.4) ${NC}"
+echo -e "${CYAN} Supports Spotify 1.2.x & 1.3.x (Rspack Architecture, tested 1.3.11) ${NC}"
 echo -e "${CYAN} GitHub: ${FUSION_REPO_URL}            ${NC}"
 
 WORKDIR="$(mktemp -d)"
